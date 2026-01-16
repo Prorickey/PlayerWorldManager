@@ -130,7 +130,7 @@ See [PLACEHOLDERS.md](PLACEHOLDERS.md) for the complete list of available placeh
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/PlayerWorldManager.git
+git clone https://github.com/Prorickey/PlayerWorldManager.git
 cd PlayerWorldManager
 
 # Build the plugin
