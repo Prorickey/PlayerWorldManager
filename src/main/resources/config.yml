@@ -1,0 +1,23 @@
+# PlayerWorldManager Configuration
+
+# The name of the default world where all players spawn
+default-world: "world"
+
+# Maximum number of worlds a player can create
+max-worlds-per-player: 3
+
+# Chat settings
+chat:
+  # Default chat mode for new players (global, world, both)
+  default-mode: "global"
+  # Format for global chat messages
+  global-format: "[Global] {player}: {message}"
+  # Format for world chat messages
+  world-format: "[{world}] {player}: {message}"
+
+# World settings
+worlds:
+  # Default world type for new player worlds (NORMAL, FLAT, AMPLIFIED)
+  default-type: "NORMAL"
+  # Default world environment (NORMAL, NETHER, THE_END)
+  default-environment: "NORMAL"

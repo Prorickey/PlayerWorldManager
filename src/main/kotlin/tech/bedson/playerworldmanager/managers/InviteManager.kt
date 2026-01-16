@@ -1,0 +1,459 @@
+package tech.bedson.playerworldmanager.managers
+
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
+import org.bukkit.Bukkit
+import org.bukkit.entity.Player
+import org.bukkit.plugin.java.JavaPlugin
+import tech.bedson.playerworldmanager.models.PlayerWorld
+import tech.bedson.playerworldmanager.models.WorldInvite
+import java.util.UUID
+
+/**
+ * Manages the invite system with request/accept flow.
+ *
+ * This manager handles sending invites, accepting/denying them, kicking players,
+ * and checking access permissions for player worlds.
+ */
+class InviteManager(
+    private val plugin: JavaPlugin,
+    private val dataManager: DataManager,
+    private val worldManager: WorldManager
+) {
+
+    /**
+     * Send an invite to a player (creates pending invite).
+     *
+     * @param world The world to invite to
+     * @param inviter The player sending the invite (must be owner)
+     * @param invitee The player being invited
+     * @return Result with success or error message
+     */
+    fun sendInvite(world: PlayerWorld, inviter: Player, invitee: Player): Result<Unit> {
+        plugin.logger.info("[InviteManager] sendInvite: Player '${inviter.name}' attempting to invite '${invitee.name}' to world '${world.name}'")
+
+        // Verify inviter is the owner
+        if (world.ownerUuid != inviter.uniqueId) {
+            plugin.logger.warning("[InviteManager] sendInvite: Player '${inviter.name}' is not the owner of world '${world.name}'")
+            return Result.failure(IllegalArgumentException("You don't own this world"))
+        }
+
+        // Check if invitee is already the owner
+        if (world.ownerUuid == invitee.uniqueId) {
+            plugin.logger.warning("[InviteManager] sendInvite: Cannot invite owner '${invitee.name}' to their own world '${world.name}'")
+            return Result.failure(IllegalArgumentException("You cannot invite yourself to your own world"))
+        }
+
+        // Check if invitee is already invited
+        if (world.invitedPlayers.contains(invitee.uniqueId)) {
+            plugin.logger.warning("[InviteManager] sendInvite: Player '${invitee.name}' is already invited to world '${world.name}'")
+            return Result.failure(IllegalArgumentException("${invitee.name} is already invited to this world"))
+        }
+
+        // Check if there's already a pending invite
+        val existingInvite = dataManager.getInvite(world.id, invitee.uniqueId)
+        if (existingInvite != null) {
+            plugin.logger.warning("[InviteManager] sendInvite: Player '${invitee.name}' already has a pending invite to world '${world.name}'")
+            return Result.failure(IllegalArgumentException("${invitee.name} already has a pending invite to this world"))
+        }
+
+        // Create invite
+        val invite = WorldInvite(
+            worldId = world.id,
+            worldName = world.name,
+            ownerUuid = world.ownerUuid,
+            ownerName = world.ownerName,
+            inviteeUuid = invitee.uniqueId,
+            inviteeName = invitee.name,
+            sentAt = System.currentTimeMillis()
+        )
+
+        // Save invite
+        dataManager.addInvite(invite)
+        plugin.logger.info("[InviteManager] sendInvite: Created and saved invite for '${invitee.name}' to world '${world.name}'")
+
+        // Notify both players
+        inviter.sendMessage(
+            Component.text("Invite sent to ", NamedTextColor.GREEN)
+                .append(Component.text(invitee.name, NamedTextColor.GOLD))
+                .append(Component.text(" for world ", NamedTextColor.GREEN))
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+        )
+
+        invitee.sendMessage(
+            Component.text(inviter.name, NamedTextColor.GOLD)
+                .append(Component.text(" has invited you to their world ", NamedTextColor.YELLOW))
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text("!", NamedTextColor.YELLOW))
+        )
+        invitee.sendMessage(
+            Component.text("Use ", NamedTextColor.YELLOW)
+                .append(Component.text("/world invite accept ${world.name}", NamedTextColor.GOLD))
+                .append(Component.text(" to accept", NamedTextColor.YELLOW))
+        )
+
+        plugin.logger.info("[InviteManager] sendInvite: Successfully sent invite from '${inviter.name}' to '${invitee.name}' for world '${world.name}'")
+        return Result.success(Unit)
+    }
+
+    /**
+     * Accept a pending invite.
+     *
+     * @param invite The invite to accept
+     * @param player The player accepting (must be the invitee)
+     * @return Result with success or error message
+     */
+    fun acceptInvite(invite: WorldInvite, player: Player): Result<Unit> {
+        plugin.logger.info("[InviteManager] acceptInvite: Player '${player.name}' attempting to accept invite to world '${invite.worldName}'")
+
+        // Verify player is the invitee
+        if (invite.inviteeUuid != player.uniqueId) {
+            plugin.logger.warning("[InviteManager] acceptInvite: Player '${player.name}' is not the invitee for this invite (expected UUID: ${invite.inviteeUuid})")
+            return Result.failure(IllegalArgumentException("This invite is not for you"))
+        }
+
+        // Load the world
+        val world = dataManager.loadWorld(invite.worldId)
+        if (world == null) {
+            plugin.logger.warning("[InviteManager] acceptInvite: World '${invite.worldName}' (ID: ${invite.worldId}) no longer exists")
+            return Result.failure(IllegalStateException("World no longer exists"))
+        }
+
+        // Add player to invited players
+        world.invitedPlayers.add(player.uniqueId)
+        dataManager.saveWorld(world)
+        plugin.logger.info("[InviteManager] acceptInvite: Added player '${player.name}' to invited players list for world '${world.name}'")
+
+        // Remove the pending invite
+        dataManager.removeInvite(invite)
+
+        // Notify the player
+        player.sendMessage(
+            Component.text("You have accepted the invite to ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text("!", NamedTextColor.GREEN))
+        )
+
+        // Notify the owner if online
+        val owner = Bukkit.getPlayer(world.ownerUuid)
+        if (owner != null) {
+            owner.sendMessage(
+                Component.text(player.name, NamedTextColor.GOLD)
+                    .append(Component.text(" has accepted your invite to ", NamedTextColor.GREEN))
+                    .append(Component.text(world.name, NamedTextColor.GOLD))
+            )
+            plugin.logger.info("[InviteManager] acceptInvite: Notified owner '${owner.name}' that '${player.name}' accepted the invite")
+        }
+
+        plugin.logger.info("[InviteManager] acceptInvite: Successfully processed invite acceptance for '${player.name}' to world '${world.name}'")
+        return Result.success(Unit)
+    }
+
+    /**
+     * Deny/decline a pending invite.
+     *
+     * @param invite The invite to deny
+     * @param player The player denying (must be the invitee)
+     * @return Result with success or error message
+     */
+    fun denyInvite(invite: WorldInvite, player: Player): Result<Unit> {
+        plugin.logger.info("[InviteManager] denyInvite: Player '${player.name}' attempting to deny invite to world '${invite.worldName}'")
+
+        // Verify player is the invitee
+        if (invite.inviteeUuid != player.uniqueId) {
+            plugin.logger.warning("[InviteManager] denyInvite: Player '${player.name}' is not the invitee for this invite (expected UUID: ${invite.inviteeUuid})")
+            return Result.failure(IllegalArgumentException("This invite is not for you"))
+        }
+
+        // Remove the pending invite
+        dataManager.removeInvite(invite)
+        plugin.logger.info("[InviteManager] denyInvite: Removed pending invite for '${player.name}' to world '${invite.worldName}'")
+
+        // Notify the player
+        player.sendMessage(
+            Component.text("You have declined the invite to ", NamedTextColor.YELLOW)
+                .append(Component.text(invite.worldName, NamedTextColor.GOLD))
+        )
+
+        // Notify the owner if online
+        val owner = Bukkit.getPlayer(invite.ownerUuid)
+        if (owner != null) {
+            owner.sendMessage(
+                Component.text(player.name, NamedTextColor.GOLD)
+                    .append(Component.text(" has declined your invite to ", NamedTextColor.YELLOW))
+                    .append(Component.text(invite.worldName, NamedTextColor.GOLD))
+            )
+            plugin.logger.info("[InviteManager] denyInvite: Notified owner '${owner.name}' that '${player.name}' declined the invite")
+        }
+
+        plugin.logger.info("[InviteManager] denyInvite: Successfully processed invite denial for '${player.name}' to world '${invite.worldName}'")
+        return Result.success(Unit)
+    }
+
+    /**
+     * Cancel a sent invite (by owner).
+     *
+     * @param invite The invite to cancel
+     * @param owner The player canceling (must be the owner)
+     * @return Result with success or error message
+     */
+    fun cancelInvite(invite: WorldInvite, owner: Player): Result<Unit> {
+        // Verify player is the owner
+        if (invite.ownerUuid != owner.uniqueId) {
+            return Result.failure(IllegalArgumentException("You didn't send this invite"))
+        }
+
+        // Remove the pending invite
+        dataManager.removeInvite(invite)
+
+        // Notify the owner
+        owner.sendMessage(
+            Component.text("Invite to ", NamedTextColor.YELLOW)
+                .append(Component.text(invite.inviteeName, NamedTextColor.GOLD))
+                .append(Component.text(" has been cancelled", NamedTextColor.YELLOW))
+        )
+
+        // Notify the invitee if online
+        val invitee = Bukkit.getPlayer(invite.inviteeUuid)
+        invitee?.sendMessage(
+            Component.text("The invite to ", NamedTextColor.YELLOW)
+                .append(Component.text(invite.worldName, NamedTextColor.GOLD))
+                .append(Component.text(" has been cancelled", NamedTextColor.YELLOW))
+        )
+
+        return Result.success(Unit)
+    }
+
+    /**
+     * Kick an invited player from a world (removes their access).
+     *
+     * @param world The world to kick from
+     * @param owner The player kicking (must be owner)
+     * @param playerToKick The UUID of the player to kick
+     * @return Result with success or error message
+     */
+    fun kickPlayer(world: PlayerWorld, owner: Player, playerToKick: UUID): Result<Unit> {
+        plugin.logger.info("[InviteManager] kickPlayer: Owner '${owner.name}' attempting to kick player UUID '$playerToKick' from world '${world.name}'")
+
+        // Verify owner
+        if (world.ownerUuid != owner.uniqueId) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Player '${owner.name}' is not the owner of world '${world.name}'")
+            return Result.failure(IllegalArgumentException("You don't own this world"))
+        }
+
+        // Check if player is the owner
+        if (playerToKick == owner.uniqueId) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Owner '${owner.name}' attempted to kick themselves from world '${world.name}'")
+            return Result.failure(IllegalArgumentException("You cannot kick yourself from your own world"))
+        }
+
+        // Check if player is invited
+        if (!world.invitedPlayers.contains(playerToKick)) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Player UUID '$playerToKick' is not invited to world '${world.name}'")
+            return Result.failure(IllegalArgumentException("This player is not invited to your world"))
+        }
+
+        // Get the kicked player's name for messaging
+        val kickedPlayerName = Bukkit.getOfflinePlayer(playerToKick).name ?: playerToKick.toString()
+        plugin.logger.info("[InviteManager] kickPlayer: Kicking player '$kickedPlayerName' from world '${world.name}'")
+
+        // Remove from invited players
+        world.invitedPlayers.remove(playerToKick)
+        dataManager.saveWorld(world)
+        plugin.logger.info("[InviteManager] kickPlayer: Removed player '$kickedPlayerName' from invited players list for world '${world.name}'")
+
+        // If player is currently in the world, teleport them out
+        val kickedPlayer = Bukkit.getPlayer(playerToKick)
+        if (kickedPlayer != null && kickedPlayer.isOnline) {
+            val playerWorld = worldManager.getPlayerWorldFromBukkitWorld(kickedPlayer.world)
+            if (playerWorld?.id == world.id) {
+                plugin.logger.info("[InviteManager] kickPlayer: Player '$kickedPlayerName' is currently in world '${world.name}', teleporting out")
+                // Teleport to default spawn
+                val defaultWorld = Bukkit.getWorlds().firstOrNull()
+                if (defaultWorld != null) {
+                    kickedPlayer.scheduler.run(plugin, { _ ->
+                        kickedPlayer.teleportAsync(defaultWorld.spawnLocation).thenAccept {
+                            kickedPlayer.sendMessage(
+                                Component.text("You have been kicked from ", NamedTextColor.RED)
+                                    .append(Component.text(world.name, NamedTextColor.GOLD))
+                            )
+                            plugin.logger.info("[InviteManager] kickPlayer: Successfully teleported '$kickedPlayerName' out of world '${world.name}'")
+                        }
+                    }, null)
+                } else {
+                    plugin.logger.warning("[InviteManager] kickPlayer: No default world found to teleport '$kickedPlayerName' to")
+                }
+            } else {
+                plugin.logger.info("[InviteManager] kickPlayer: Player '$kickedPlayerName' is not currently in world '${world.name}', sending notification only")
+                // Not in the world, just notify
+                kickedPlayer.sendMessage(
+                    Component.text("You have been removed from ", NamedTextColor.YELLOW)
+                        .append(Component.text(world.name, NamedTextColor.GOLD))
+                )
+            }
+        } else {
+            plugin.logger.info("[InviteManager] kickPlayer: Player '$kickedPlayerName' is offline, no teleport needed")
+        }
+
+        // Notify owner
+        owner.sendMessage(
+            Component.text("Kicked ", NamedTextColor.GREEN)
+                .append(Component.text(kickedPlayerName, NamedTextColor.GOLD))
+                .append(Component.text(" from ", NamedTextColor.GREEN))
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+        )
+
+        plugin.logger.info("[InviteManager] kickPlayer: Successfully kicked player '$kickedPlayerName' from world '${world.name}'")
+        return Result.success(Unit)
+    }
+
+    /**
+     * Get all pending invites for a player.
+     *
+     * @param playerUuid The player's UUID
+     * @return List of pending invites
+     */
+    fun getPendingInvites(playerUuid: UUID): List<WorldInvite> {
+        return dataManager.getInvitesForPlayer(playerUuid)
+    }
+
+    /**
+     * Get all pending invites sent for a world.
+     *
+     * @param worldId The world's UUID
+     * @return List of pending invites
+     */
+    fun getPendingInvitesForWorld(worldId: UUID): List<WorldInvite> {
+        return dataManager.getInvitesForWorld(worldId)
+    }
+
+    /**
+     * Check if player is invited to a world.
+     *
+     * @param playerUuid The player's UUID
+     * @param world The world to check
+     * @return True if player is in the invited players list
+     */
+    fun isInvited(playerUuid: UUID, world: PlayerWorld): Boolean {
+        return world.invitedPlayers.contains(playerUuid)
+    }
+
+    /**
+     * Check if player has access to a world (owner OR invited).
+     *
+     * @param playerUuid The player's UUID
+     * @param world The world to check
+     * @return True if player is owner or invited
+     */
+    fun hasAccess(playerUuid: UUID, world: PlayerWorld): Boolean {
+        val isOwner = world.ownerUuid == playerUuid
+        val isInvited = world.invitedPlayers.contains(playerUuid)
+        val hasAccess = isOwner || isInvited
+        plugin.logger.info("[InviteManager] hasAccess: Checking access for player UUID '$playerUuid' to world '${world.name}' - Owner: $isOwner, Invited: $isInvited, Result: $hasAccess")
+        return hasAccess
+    }
+
+    /**
+     * Get all players invited to a world.
+     *
+     * @param world The world
+     * @return Set of invited player UUIDs
+     */
+    fun getInvitedPlayers(world: PlayerWorld): Set<UUID> {
+        return world.invitedPlayers.toSet()
+    }
+
+    /**
+     * Transfer world ownership.
+     *
+     * @param world The world to transfer
+     * @param currentOwner The current owner (must match world owner)
+     * @param newOwnerUuid The UUID of the new owner
+     * @return Result with success or error message
+     */
+    fun transferOwnership(world: PlayerWorld, currentOwner: Player, newOwnerUuid: UUID): Result<Unit> {
+        plugin.logger.info("[InviteManager] transferOwnership: Player '${currentOwner.name}' attempting to transfer ownership of world '${world.name}' to UUID '$newOwnerUuid'")
+
+        // Verify current owner
+        if (world.ownerUuid != currentOwner.uniqueId) {
+            plugin.logger.warning("[InviteManager] transferOwnership: Player '${currentOwner.name}' is not the owner of world '${world.name}'")
+            return Result.failure(IllegalArgumentException("You don't own this world"))
+        }
+
+        // Check if trying to transfer to self
+        if (newOwnerUuid == currentOwner.uniqueId) {
+            plugin.logger.warning("[InviteManager] transferOwnership: Player '${currentOwner.name}' attempted to transfer ownership to themselves")
+            return Result.failure(IllegalArgumentException("You already own this world"))
+        }
+
+        // Check if new owner is invited
+        if (!world.invitedPlayers.contains(newOwnerUuid)) {
+            plugin.logger.warning("[InviteManager] transferOwnership: New owner UUID '$newOwnerUuid' is not invited to world '${world.name}'")
+            return Result.failure(IllegalArgumentException("The new owner must be invited to the world first"))
+        }
+
+        // Get new owner's name
+        val newOwner = Bukkit.getOfflinePlayer(newOwnerUuid)
+        val newOwnerName = newOwner.name
+        if (newOwnerName == null) {
+            plugin.logger.severe("[InviteManager] transferOwnership: Could not find name for new owner UUID '$newOwnerUuid'")
+            return Result.failure(IllegalStateException("Could not find new owner's name"))
+        }
+        plugin.logger.info("[InviteManager] transferOwnership: Transferring ownership to player '$newOwnerName'")
+
+        // Update world ownership
+        val oldOwnerUuid = world.ownerUuid
+        val oldOwnerName = world.ownerName
+
+        // Create a new PlayerWorld with updated owner (since ownerUuid and ownerName are val)
+        val updatedWorld = world.copy(
+            ownerUuid = newOwnerUuid,
+            ownerName = newOwnerName
+        )
+
+        // Remove new owner from invited players
+        updatedWorld.invitedPlayers.remove(newOwnerUuid)
+        plugin.logger.info("[InviteManager] transferOwnership: Removed new owner '$newOwnerName' from invited players list")
+
+        // Add old owner to invited players
+        updatedWorld.invitedPlayers.add(oldOwnerUuid)
+        plugin.logger.info("[InviteManager] transferOwnership: Added old owner '$oldOwnerName' to invited players list")
+
+        // Save updated world
+        dataManager.saveWorld(updatedWorld)
+
+        // Update old owner's player data
+        val oldOwnerData = dataManager.getOrCreatePlayerData(oldOwnerUuid, oldOwnerName)
+        oldOwnerData.ownedWorlds.remove(world.id)
+        dataManager.savePlayerData(oldOwnerData)
+        plugin.logger.info("[InviteManager] transferOwnership: Removed world '${world.name}' from old owner '$oldOwnerName' owned worlds")
+
+        // Update new owner's player data
+        val newOwnerData = dataManager.getOrCreatePlayerData(newOwnerUuid, newOwnerName)
+        newOwnerData.ownedWorlds.add(world.id)
+        dataManager.savePlayerData(newOwnerData)
+        plugin.logger.info("[InviteManager] transferOwnership: Added world '${world.name}' to new owner '$newOwnerName' owned worlds")
+
+        // Notify current owner
+        currentOwner.sendMessage(
+            Component.text("Transferred ownership of ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(" to ", NamedTextColor.GREEN))
+                .append(Component.text(newOwnerName, NamedTextColor.GOLD))
+        )
+
+        // Notify new owner if online
+        val newOwnerPlayer = Bukkit.getPlayer(newOwnerUuid)
+        if (newOwnerPlayer != null) {
+            newOwnerPlayer.sendMessage(
+                Component.text("You are now the owner of ", NamedTextColor.GREEN)
+                    .append(Component.text(world.name, NamedTextColor.GOLD))
+                    .append(Component.text("!", NamedTextColor.GREEN))
+            )
+            plugin.logger.info("[InviteManager] transferOwnership: Notified new owner '$newOwnerName' of ownership transfer")
+        }
+
+        plugin.logger.info("[InviteManager] transferOwnership: Successfully transferred ownership of world '${world.name}' from '$oldOwnerName' to '$newOwnerName'")
+        return Result.success(Unit)
+    }
+}
