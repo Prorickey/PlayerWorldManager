@@ -1,7 +1,8 @@
 plugins {
     kotlin("jvm") version "1.9.22"
-    id("io.github.goooler.shadow") version "8.1.8"
+    id("com.gradleup.shadow") version "9.3.1"
     id("net.minecrell.plugin-yml.paper") version "0.6.0"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
 }
 
 group = "tech.bedson"
@@ -15,8 +16,7 @@ repositories {
 }
 
 dependencies {
-    // Paper API includes Folia scheduler methods; use foliaSupported = true in paper block
-    compileOnly("io.papermc.paper:paper-api:1.21-R0.1-SNAPSHOT")
+    paperweight.paperDevBundle("1.21.11-R0.1-SNAPSHOT")
     compileOnly("me.clip:placeholderapi:2.11.6")
     implementation("dev.triumphteam:triumph-gui:3.1.13")
     implementation("org.jetbrains.kotlin:kotlin-stdlib")
@@ -26,11 +26,27 @@ kotlin {
     jvmToolchain(21)
 }
 
+// Use Mojang mappings for Paper plugins (recommended)
+paperweight.reobfArtifactConfiguration =
+    io.papermc.paperweight.userdev.ReobfArtifactConfiguration.MOJANG_PRODUCTION
+
 tasks {
+    jar {
+        enabled = false
+    }
+
     shadowJar {
         archiveClassifier.set("")
         relocate("dev.triumphteam.gui", "tech.bedson.playerworldmanager.libs.gui")
         relocate("kotlin", "tech.bedson.playerworldmanager.libs.kotlin")
+    }
+
+    reobfJar {
+        inputJar.set(shadowJar.flatMap { it.archiveFile })
+    }
+
+    assemble {
+        dependsOn(reobfJar)
     }
 
     build {
@@ -64,8 +80,8 @@ tasks.register<Exec>("downloadFolia") {
 tasks.register<Copy>("deployPlugin") {
     group = "folia"
     description = "Copy the plugin JAR to the Folia server plugins folder"
-    dependsOn("shadowJar")
-    from(tasks.named("shadowJar").map { (it as org.gradle.jvm.tasks.Jar).archiveFile })
+    dependsOn("reobfJar")
+    from(tasks.named("reobfJar").map { (it as io.papermc.paperweight.tasks.RemapJar).outputJar })
     into(pluginsDir)
     doFirst {
         pluginsDir.asFile.mkdirs()

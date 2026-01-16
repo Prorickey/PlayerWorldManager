@@ -72,6 +72,36 @@ This is a Minecraft Folia/Paper plugin written in Kotlin using Gradle Kotlin DSL
 
 Plugin configuration is in `src/main/resources/config.yml`. The `paper` block in `build.gradle.kts` auto-generates `plugin.yml` with `folia-supported: true`.
 
+## LLM Testing Guidelines
+
+When testing the plugin interactively:
+
+1. **ALWAYS start the server in background mode** using `run_in_background: true` parameter:
+   ```
+   ./gradlew startServer  # Use run_in_background: true in Bash tool
+   ```
+   This keeps your main thread free to send RCON commands and interact with the user.
+
+2. **Use RCON for command testing**:
+   ```bash
+   ./gradlew rcon -Pcmd="pwmtest status"    # Check plugin status
+   ./gradlew rcon -Pcmd="pwmtest list"      # List all worlds
+   ./gradlew rcon -Pcmd="pwmtest create testworld normal"  # Create world (requires player online)
+   ```
+
+3. **Console test commands** (`/pwmtest`) are available for automated testing:
+   - `pwmtest status` - Show plugin and server status
+   - `pwmtest list` - List all plugin worlds
+   - `pwmtest create <name> [type]` - Create world (requires test player "Prodeathmaster" online)
+   - `pwmtest delete <name>` - Delete a world
+   - `pwmtest info <name>` - Show world details
+   - `pwmtest cleanup` - Delete all test player's worlds
+
+4. **Stop the server** when done:
+   ```bash
+   ./gradlew stopServer
+   ```
+
 ## Skills
 
 See `.claude/skills/` for development patterns:

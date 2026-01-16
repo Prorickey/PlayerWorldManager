@@ -1,11 +1,49 @@
 package tech.bedson.playerworldmanager.managers
 
+import com.google.common.collect.ImmutableList
+import com.mojang.serialization.Dynamic
+import com.mojang.serialization.Lifecycle
+import net.minecraft.core.RegistryAccess
+import net.minecraft.core.registries.Registries
+import net.minecraft.nbt.NbtException
+import net.minecraft.nbt.ReportedNbtException
+import net.minecraft.resources.ResourceKey
+import net.minecraft.server.MinecraftServer
+import net.minecraft.server.WorldLoader
+import net.minecraft.server.dedicated.DedicatedServer
+import net.minecraft.server.dedicated.DedicatedServerProperties
+import net.minecraft.server.level.ServerLevel
+import net.minecraft.util.GsonHelper
+import net.minecraft.util.datafix.DataFixers
+import net.minecraft.world.Difficulty
+import net.minecraft.world.entity.ai.village.VillageSiege
+import net.minecraft.world.entity.npc.CatSpawner
+import net.minecraft.world.entity.npc.wanderingtrader.WanderingTraderSpawner
+import net.minecraft.world.level.CustomSpawner
+import net.minecraft.world.level.GameType
+import net.minecraft.world.level.LevelSettings
+import net.minecraft.world.level.biome.BiomeManager
+import net.minecraft.world.level.dimension.LevelStem
+import net.minecraft.world.level.levelgen.PatrolSpawner
+import net.minecraft.world.level.levelgen.PhantomSpawner
+import net.minecraft.world.level.levelgen.WorldDimensions
+import net.minecraft.world.level.levelgen.WorldOptions
+import net.minecraft.world.level.storage.LevelDataAndDimensions
+import net.minecraft.world.level.storage.LevelStorageSource
+import net.minecraft.world.level.storage.PrimaryLevelData
+import net.minecraft.world.level.validation.ContentValidationException
 import org.bukkit.Bukkit
+import org.bukkit.GameMode
 import org.bukkit.GameRule
 import org.bukkit.Location
 import org.bukkit.World
-import org.bukkit.WorldCreator
+import org.bukkit.craftbukkit.CraftServer
+import org.bukkit.craftbukkit.CraftWorld
+import org.bukkit.craftbukkit.generator.CraftWorldInfo
 import org.bukkit.entity.Player
+import org.bukkit.generator.BiomeProvider
+import org.bukkit.generator.ChunkGenerator
+import org.bukkit.generator.WorldInfo
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.models.PlayerWorld
 import tech.bedson.playerworldmanager.models.TimeLock
@@ -15,6 +53,8 @@ import tech.bedson.playerworldmanager.models.toBukkitLocation
 import tech.bedson.playerworldmanager.models.toSimpleLocation
 import tech.bedson.playerworldmanager.utils.VoidGenerator
 import java.io.File
+import java.io.IOException
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.logging.Logger
@@ -696,7 +736,7 @@ class WorldManager(
     }
 
     /**
-     * Create a dimension world.
+     * Create a dimension world using NMS classes for Folia compatibility.
      *
      * @param worldName The world name
      * @param environment The dimension type
@@ -711,40 +751,237 @@ class WorldManager(
         seed: Long?
     ): World? {
         logger.info("[WorldManager] createDimension: Creating dimension '$worldName' (Environment: $environment, Type: $worldType, Seed: ${seed ?: "random"})")
-        return try {
-            val creator = WorldCreator.name(worldName)
-                .environment(environment)
 
-            // Apply seed if provided
-            if (seed != null) {
-                creator.seed(seed)
+        try {
+            val craftServer = Bukkit.getServer() as CraftServer
+            val console = craftServer.server as DedicatedServer
+
+            // Check if world already exists
+            val existingWorld = craftServer.getWorld(worldName)
+            if (existingWorld != null) {
+                logger.warning("[WorldManager] createDimension: World '$worldName' already exists")
+                return existingWorld
             }
 
-            // Apply world type
-            when (worldType) {
-                WorldType.NORMAL -> creator.type(org.bukkit.WorldType.NORMAL)
-                WorldType.FLAT -> creator.type(org.bukkit.WorldType.FLAT)
-                WorldType.AMPLIFIED -> creator.type(org.bukkit.WorldType.AMPLIFIED)
-                WorldType.LARGE_BIOMES -> creator.type(org.bukkit.WorldType.LARGE_BIOMES)
-                WorldType.VOID -> {
-                    creator.type(org.bukkit.WorldType.FLAT)
-                    creator.generator(VoidGenerator())
+            // Determine the actual dimension key
+            val actualDimension = when (environment) {
+                World.Environment.NORMAL -> LevelStem.OVERWORLD
+                World.Environment.NETHER -> LevelStem.NETHER
+                World.Environment.THE_END -> LevelStem.END
+                World.Environment.CUSTOM -> LevelStem.OVERWORLD // Custom uses overworld settings
+            }
+
+            val worldContainer = craftServer.worldContainer
+            val worldFolder = File(worldContainer, worldName)
+
+            // Validate world folder
+            if (worldFolder.exists() && !worldFolder.isDirectory) {
+                logger.severe("[WorldManager] createDimension: World folder '$worldName' exists but is not a directory")
+                return null
+            }
+
+            // Create level storage access
+            val levelStorageAccess: LevelStorageSource.LevelStorageAccess = try {
+                LevelStorageSource.createDefault(worldContainer.toPath())
+                    .validateAndCreateAccess(worldName, actualDimension)
+            } catch (ex: IOException) {
+                logger.severe("[WorldManager] createDimension: IOException creating storage access: ${ex.message}")
+                ex.printStackTrace()
+                return null
+            } catch (ex: ContentValidationException) {
+                logger.severe("[WorldManager] createDimension: Content validation error: ${ex.message}")
+                ex.printStackTrace()
+                return null
+            }
+
+            // Configure generator and biome provider
+            var generator: ChunkGenerator? = null
+            var biomeProvider: BiomeProvider? = null
+
+            if (worldType == WorldType.VOID) {
+                generator = VoidGenerator()
+            }
+
+            // Load or create world data
+            val dataTag: Dynamic<*>?
+            if (levelStorageAccess.hasWorldData()) {
+                try {
+                    dataTag = levelStorageAccess.dataTag
+                    val summary = levelStorageAccess.getSummary(dataTag)
+
+                    if (summary.requiresManualConversion()) {
+                        logger.severe("[WorldManager] createDimension: World requires manual conversion")
+                        levelStorageAccess.close()
+                        return null
+                    }
+
+                    if (!summary.isCompatible()) {
+                        logger.severe("[WorldManager] createDimension: World was created by incompatible version")
+                        levelStorageAccess.close()
+                        return null
+                    }
+                } catch (ex: Exception) {
+                    when (ex) {
+                        is NbtException, is ReportedNbtException, is IOException -> {
+                            logger.warning("[WorldManager] createDimension: Failed to load world data, attempting fallback")
+                            try {
+                                levelStorageAccess.dataTagFallback
+                                levelStorageAccess.restoreLevelDataFromOld()
+                            } catch (fallbackEx: Exception) {
+                                logger.severe("[WorldManager] createDimension: Fallback failed: ${fallbackEx.message}")
+                                levelStorageAccess.close()
+                                return null
+                            }
+                        }
+                        else -> throw ex
+                    }
                 }
             }
 
-            val result = creator.createWorld()
-            logger.info("[WorldManager] createDimension: Successfully created dimension '$worldName'")
-            result
+            // Get world loader context and registry access
+            val context: WorldLoader.DataLoadContext = console.worldLoaderContext
+            var registryAccess: RegistryAccess.Frozen = context.datapackDimensions()
+            var contextLevelStemRegistry = registryAccess.lookupOrThrow(Registries.LEVEL_STEM)
+
+            val primaryLevelData: PrimaryLevelData
+
+            if (levelStorageAccess.hasWorldData()) {
+                // Load existing world data
+                val dataTag = levelStorageAccess.dataTag
+                val levelDataAndDimensions = LevelStorageSource.getLevelDataAndDimensions(
+                    dataTag,
+                    context.dataConfiguration(),
+                    contextLevelStemRegistry,
+                    context.datapackWorldgen()
+                )
+
+                primaryLevelData = levelDataAndDimensions.worldData() as PrimaryLevelData
+                registryAccess = levelDataAndDimensions.dimensions().dimensionsRegistryAccess()
+            } else {
+                // Create new world data
+                val actualSeed = seed ?: System.currentTimeMillis()
+                val worldOptions = WorldOptions(actualSeed, true, false)
+
+                // Build generator settings JSON
+                val generatorSettings = "{}"
+                val bukkitWorldTypeName = when (worldType) {
+                    WorldType.NORMAL -> "normal"
+                    WorldType.FLAT -> "flat"
+                    WorldType.AMPLIFIED -> "amplified"
+                    WorldType.LARGE_BIOMES -> "large_biomes"
+                    WorldType.VOID -> "flat" // Use flat with custom generator
+                }
+
+                val properties = DedicatedServerProperties.WorldDimensionData(
+                    GsonHelper.parse(generatorSettings),
+                    bukkitWorldTypeName
+                )
+
+                val levelSettings = LevelSettings(
+                    worldName,
+                    GameType.SURVIVAL,
+                    false, // hardcore
+                    Difficulty.EASY,
+                    false, // allowCommands
+                    net.minecraft.world.level.gamerules.GameRules(context.dataConfiguration().enabledFeatures()),
+                    context.dataConfiguration()
+                )
+
+                val worldDimensions = properties.create(context.datapackWorldgen())
+                val complete = worldDimensions.bake(contextLevelStemRegistry)
+                val lifecycle = complete.lifecycle().add(context.datapackWorldgen().allRegistriesLifecycle())
+
+                primaryLevelData = PrimaryLevelData(levelSettings, worldOptions, complete.specialWorldProperty(), lifecycle)
+                registryAccess = complete.dimensionsRegistryAccess()
+            }
+
+            // Update registry references
+            contextLevelStemRegistry = registryAccess.lookupOrThrow(Registries.LEVEL_STEM)
+            primaryLevelData.customDimensions = contextLevelStemRegistry
+            primaryLevelData.checkName(worldName)
+            primaryLevelData.setModdedInfo(console.serverModName, console.moddedStatus.shouldReportAsModified())
+
+            // Create custom spawners list
+            val obfuscatedSeed = BiomeManager.obfuscateSeed(primaryLevelData.worldGenOptions().seed())
+            val spawners: List<CustomSpawner> = if (environment == World.Environment.NORMAL) {
+                ImmutableList.of(
+                    PhantomSpawner(),
+                    PatrolSpawner(),
+                    CatSpawner(),
+                    VillageSiege(),
+                    WanderingTraderSpawner(primaryLevelData)
+                )
+            } else {
+                ImmutableList.of()
+            }
+
+            // Get level stem
+            val customStem = contextLevelStemRegistry.getValue(actualDimension)
+                ?: throw IllegalStateException("Cannot find dimension $actualDimension in registry")
+
+            // Create world info for generator/biome provider
+            val worldInfo: WorldInfo = CraftWorldInfo(
+                primaryLevelData,
+                levelStorageAccess,
+                environment,
+                customStem.type().value(),
+                customStem.generator(),
+                console.registryAccess()
+            )
+
+            // Set up biome provider if generator exists
+            if (biomeProvider == null && generator != null) {
+                biomeProvider = generator.getDefaultBiomeProvider(worldInfo)
+            }
+
+            // Create resource key for the dimension
+            val worldKey = ResourceKey.create(
+                Registries.DIMENSION,
+                net.minecraft.resources.Identifier.fromNamespaceAndPath("playerworldmanager", worldName.lowercase())
+            )
+
+            // Create the ServerLevel
+            val serverLevel = ServerLevel(
+                console,
+                console.executor,
+                levelStorageAccess,
+                primaryLevelData,
+                worldKey,
+                customStem,
+                primaryLevelData.isDebugWorld,
+                obfuscatedSeed,
+                spawners,
+                true, // shouldTickTime
+                console.overworld().randomSequences,
+                environment,
+                generator,
+                biomeProvider
+            )
+
+            // Add the world to the server
+            console.addLevel(serverLevel)
+            console.initWorld(serverLevel, primaryLevelData, primaryLevelData.worldGenOptions())
+
+            // Set spawn settings
+            serverLevel.setSpawnSettings(true)
+
+            // Prepare the level
+            console.prepareLevel(serverLevel)
+
+            val craftWorld = serverLevel.world as CraftWorld
+            logger.info("[WorldManager] createDimension: Successfully created dimension '$worldName' using NMS")
+            return craftWorld
 
         } catch (e: Exception) {
             logger.severe("[WorldManager] createDimension: Failed to create dimension $worldName: ${e.message}")
             e.printStackTrace()
-            null
+            return null
         }
     }
 
     /**
      * Create or load a dimension world (used during initialization).
+     * This method now uses the same NMS approach as createDimension.
      *
      * @param worldName The world name
      * @param environment The dimension type
@@ -761,27 +998,14 @@ class WorldManager(
         // Check if world folder exists
         val worldFolder = File(plugin.server.worldContainer, worldName)
 
-        return if (worldFolder.exists()) {
-            // Load existing world
-            try {
-                val creator = WorldCreator.name(worldName)
-                    .environment(environment)
-
-                // For void worlds, we need to specify the generator even when loading
-                if (worldType == WorldType.VOID) {
-                    creator.generator(VoidGenerator())
-                }
-
-                creator.createWorld()
-            } catch (e: Exception) {
-                logger.severe("Failed to load dimension $worldName: ${e.message}")
-                e.printStackTrace()
-                null
-            }
+        if (worldFolder.exists()) {
+            logger.info("[WorldManager] createOrLoadDimension: Loading existing world '$worldName'")
         } else {
-            // Create new world
-            createDimension(worldName, environment, worldType, seed)
+            logger.info("[WorldManager] createOrLoadDimension: Creating new world '$worldName'")
         }
+
+        // Use the unified NMS approach for both loading and creating
+        return createDimension(worldName, environment, worldType, seed)
     }
 
     /**

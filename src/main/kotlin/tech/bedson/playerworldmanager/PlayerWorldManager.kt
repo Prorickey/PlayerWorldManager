@@ -4,6 +4,7 @@ import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import org.bukkit.Bukkit
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.commands.ChatCommands
+import tech.bedson.playerworldmanager.commands.TestCommands
 import tech.bedson.playerworldmanager.commands.WorldAdminCommands
 import tech.bedson.playerworldmanager.commands.WorldCommands
 import tech.bedson.playerworldmanager.gui.AdminMenuGui
@@ -109,6 +110,14 @@ class PlayerWorldManager : JavaPlugin() {
                 worldAdminCommands.build(),
                 "Admin commands for world management",
                 listOf("wa", "wadmin")
+            )
+
+            // Console test commands (for LLM/automated testing)
+            val testCommands = TestCommands(this, worldManager, inviteManager, dataManager)
+            registrar.register(
+                testCommands.build(),
+                "Console test commands for automated testing",
+                listOf("pwmt")
             )
 
             logger.info("Brigadier commands registered!")

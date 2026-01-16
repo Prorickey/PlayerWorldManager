@@ -140,8 +140,8 @@ class WorldCommands(
             .then(Commands.literal("help")
                 .executes(::handleHelp)
             )
-            // Default (no args) shows help
-            .executes(::handleHelp)
+            // Default (no args) opens main menu GUI
+            .executes(::handleMenu)
             .build()
     }
 
