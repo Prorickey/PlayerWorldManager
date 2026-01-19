@@ -11,7 +11,7 @@
 set -e
 
 PROJECT="folia"
-API_BASE="https://api.papermc.io/v2"
+API_BASE="https://fill.papermc.io/v3"
 USER_AGENT="PlayerWorldManager/1.0 (https://github.com/prorickey/PlayerWorldManager)"
 
 # Check for required tools
@@ -29,13 +29,15 @@ fi
 echo "Fetching Folia information..."
 
 # Get latest version if not specified
+# v3 API returns versions as nested object: {"1.21": ["1.21.11", ...], "1.20": [...]}
 if [ -z "$1" ]; then
     PROJECT_INFO=$(curl -sfA "$USER_AGENT" "$API_BASE/projects/$PROJECT")
     if [ -z "$PROJECT_INFO" ]; then
         echo "Error: Could not fetch project info for $PROJECT"
         exit 1
     fi
-    VERSION=$(echo "$PROJECT_INFO" | jq -r '.versions[-1]')
+    # Get all versions flattened and sorted, then take the latest
+    VERSION=$(echo "$PROJECT_INFO" | jq -r '.versions | to_entries | map(.value[]) | sort_by(. | split(".") | map(tonumber? // 0)) | last')
     if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
         echo "Error: Could not determine latest version"
         echo "$PROJECT_INFO" | jq '.versions'
@@ -56,26 +58,42 @@ if [ -z "$BUILD_DATA" ]; then
     exit 1
 fi
 
-# Get latest build if not specified
+# Get latest build if not specified (v3 API returns builds as array directly)
 if [ -z "$2" ]; then
-    BUILD=$(echo "$BUILD_DATA" | jq -r '.builds[-1].build')
+    BUILD=$(echo "$BUILD_DATA" | jq -r '.[-1].id')
     echo "Using latest build: $BUILD"
 else
     BUILD="$2"
 fi
 
 # Get download filename
-BUILD_INFO=$(echo "$BUILD_DATA" | jq -r ".builds[] | select(.build == $BUILD)")
+BUILD_INFO=$(echo "$BUILD_DATA" | jq -r ".[] | select(.id == $BUILD)")
 if [ -z "$BUILD_INFO" ] || [ "$BUILD_INFO" = "null" ]; then
     echo "Error: Could not find build $BUILD"
     echo "Available builds:"
-    echo "$BUILD_DATA" | jq '[.builds[].build]'
+    echo "$BUILD_DATA" | jq '[.[].id]'
     exit 1
 fi
 
-DOWNLOAD_NAME=$(echo "$BUILD_INFO" | jq -r '.downloads.application.name')
-CHECKSUM=$(echo "$BUILD_INFO" | jq -r '.downloads.application.sha256')
-DOWNLOAD_URL="$API_BASE/projects/$PROJECT/versions/$VERSION/builds/$BUILD/downloads/$DOWNLOAD_NAME"
+# v3 API uses "server:default" key for server downloads
+DOWNLOAD_INFO=$(echo "$BUILD_INFO" | jq -r '.downloads["server:default"]')
+if [ -z "$DOWNLOAD_INFO" ] || [ "$DOWNLOAD_INFO" = "null" ]; then
+    echo "Error: Could not find server download for build $BUILD"
+    echo "Available download keys:"
+    echo "$BUILD_INFO" | jq '.downloads | keys'
+    exit 1
+fi
+
+DOWNLOAD_NAME=$(echo "$DOWNLOAD_INFO" | jq -r '.name')
+CHECKSUM=$(echo "$DOWNLOAD_INFO" | jq -r '.checksums.sha256')
+DOWNLOAD_URL=$(echo "$DOWNLOAD_INFO" | jq -r '.url')
+
+if [ -z "$DOWNLOAD_URL" ] || [ "$DOWNLOAD_URL" = "null" ]; then
+    echo "Error: Could not extract download URL from API response"
+    echo "Download info:"
+    echo "$DOWNLOAD_INFO" | jq '.'
+    exit 1
+fi
 
 echo ""
 echo "Download details:"

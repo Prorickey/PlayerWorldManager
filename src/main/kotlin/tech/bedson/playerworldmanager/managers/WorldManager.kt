@@ -35,6 +35,7 @@ import net.minecraft.world.level.validation.ContentValidationException
 import org.bukkit.Bukkit
 import org.bukkit.GameMode
 import org.bukkit.GameRule
+import org.bukkit.GameRules
 import org.bukkit.Location
 import org.bukkit.World
 import org.bukkit.craftbukkit.CraftServer
@@ -83,6 +84,9 @@ class WorldManager(
     // Default world limit per player
     private val defaultWorldLimit = 3
 
+    // File to store worlds pending deletion (on Folia, we can't unload worlds dynamically)
+    private val pendingDeletionsFile = File(plugin.dataFolder, "pending-deletions.txt")
+
     companion object {
         // World name suffixes for dimensions
         private const val NETHER_SUFFIX = "_nether"
@@ -94,6 +98,9 @@ class WorldManager(
      */
     fun initialize() {
         logger.info("Initializing WorldManager...")
+
+        // Process any pending deletions from previous server runs (before loading worlds)
+        processPendingDeletions()
 
         // Load all worlds from data
         val worlds = dataManager.getAllWorlds()
@@ -298,20 +305,23 @@ class WorldManager(
                     logger.info("[WorldManager] deleteWorld: All players teleported, proceeding with world deletion")
                     Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
                         try {
-                            // Unload all dimensions
-                            logger.info("[WorldManager] deleteWorld: Unloading all dimensions for world '${world.name}'")
+                            // On Folia, Bukkit.unloadWorld() throws UnsupportedOperationException
+                            // Instead of unloading, we'll mark the world for deletion and delete files
+                            // The world will remain loaded until server restart, but files will be deleted
+                            logger.info("[WorldManager] deleteWorld: Skipping world unload (not supported on Folia)")
+                            logger.info("[WorldManager] deleteWorld: World will remain loaded until server restart")
+
+                            // Mark worlds as pending deletion
+                            logger.info("[WorldManager] deleteWorld: Marking world '${world.name}' for deletion")
+                            val worldNames = mutableListOf<String>()
                             for (env in World.Environment.entries) {
                                 val worldName = getWorldName(world, env)
-                                val bukkitWorld = Bukkit.getWorld(worldName)
-                                if (bukkitWorld != null) {
-                                    Bukkit.unloadWorld(bukkitWorld, true)
-                                    logger.info("[WorldManager] deleteWorld: Unloaded world: $worldName")
-                                } else {
-                                    logger.info("[WorldManager] deleteWorld: World $worldName not loaded, skipping unload")
-                                }
+                                worldNames.add(worldName)
                             }
+                            addPendingDeletions(worldNames)
 
-                            // Delete world folders from disk
+                            // Delete world folders from disk immediately
+                            // The worlds will stay loaded in memory but files will be deleted
                             logger.info("[WorldManager] deleteWorld: Deleting world folders from disk for '${world.name}'")
                             val serverFolder = plugin.server.worldContainer
                             for (env in World.Environment.entries) {
@@ -339,6 +349,7 @@ class WorldManager(
                             }
 
                             logger.info("[WorldManager] deleteWorld: Successfully deleted world '${world.name}' (owner: ${world.ownerName})")
+                            logger.info("[WorldManager] deleteWorld: Note: World remains in memory until server restart")
                             future.complete(Result.success(Unit))
 
                         } catch (e: Exception) {
@@ -620,17 +631,17 @@ class WorldManager(
         when (world.timeLock) {
             TimeLock.DAY -> {
                 logger.info("[WorldManager] applyWorldSettings: Setting time to DAY (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, false)
+                bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, false)
                 bukkitWorld.time = 6000 // Noon
             }
             TimeLock.NIGHT -> {
                 logger.info("[WorldManager] applyWorldSettings: Setting time to NIGHT (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, false)
+                bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, false)
                 bukkitWorld.time = 18000 // Midnight
             }
             TimeLock.CYCLE -> {
                 logger.info("[WorldManager] applyWorldSettings: Enabling time CYCLE for '${world.name}'")
-                bukkitWorld.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, true)
+                bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, true)
             }
         }
 
@@ -638,19 +649,19 @@ class WorldManager(
         when (world.weatherLock) {
             WeatherLock.CLEAR -> {
                 logger.info("[WorldManager] applyWorldSettings: Setting weather to CLEAR (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRule.DO_WEATHER_CYCLE, false)
+                bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, false)
                 bukkitWorld.setStorm(false)
                 bukkitWorld.isThundering = false
             }
             WeatherLock.RAIN -> {
                 logger.info("[WorldManager] applyWorldSettings: Setting weather to RAIN (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRule.DO_WEATHER_CYCLE, false)
+                bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, false)
                 bukkitWorld.setStorm(true)
                 bukkitWorld.isThundering = false
             }
             WeatherLock.CYCLE -> {
                 logger.info("[WorldManager] applyWorldSettings: Enabling weather CYCLE for '${world.name}'")
-                bukkitWorld.setGameRule(GameRule.DO_WEATHER_CYCLE, true)
+                bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, true)
             }
         }
         logger.info("[WorldManager] applyWorldSettings: Successfully applied settings to world '${world.name}'")
@@ -1023,5 +1034,77 @@ class WorldManager(
         }
 
         directory.delete()
+    }
+
+    /**
+     * Add world names to the pending deletions file.
+     * These worlds will be deleted on next server startup.
+     *
+     * @param worldNames List of world names to mark for deletion
+     */
+    private fun addPendingDeletions(worldNames: List<String>) {
+        try {
+            val existingDeletions = if (pendingDeletionsFile.exists()) {
+                pendingDeletionsFile.readLines().toMutableSet()
+            } else {
+                mutableSetOf()
+            }
+
+            existingDeletions.addAll(worldNames)
+
+            pendingDeletionsFile.writeText(existingDeletions.joinToString("\n"))
+            logger.info("[WorldManager] addPendingDeletions: Added ${worldNames.size} worlds to pending deletions list")
+        } catch (e: Exception) {
+            logger.severe("[WorldManager] addPendingDeletions: Failed to write pending deletions: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Process pending world deletions from previous server runs.
+     * This should be called during plugin initialization before worlds are loaded.
+     */
+    fun processPendingDeletions() {
+        if (!pendingDeletionsFile.exists()) {
+            logger.info("[WorldManager] processPendingDeletions: No pending deletions file found")
+            return
+        }
+
+        try {
+            val worldNames = pendingDeletionsFile.readLines().filter { it.isNotBlank() }
+            if (worldNames.isEmpty()) {
+                logger.info("[WorldManager] processPendingDeletions: Pending deletions file is empty")
+                pendingDeletionsFile.delete()
+                return
+            }
+
+            logger.info("[WorldManager] processPendingDeletions: Found ${worldNames.size} worlds pending deletion")
+
+            val serverFolder = plugin.server.worldContainer
+            var deletedCount = 0
+
+            worldNames.forEach { worldName ->
+                val worldFolder = File(serverFolder, worldName)
+                if (worldFolder.exists()) {
+                    try {
+                        deleteDirectory(worldFolder)
+                        logger.info("[WorldManager] processPendingDeletions: Deleted world folder: $worldName")
+                        deletedCount++
+                    } catch (e: Exception) {
+                        logger.warning("[WorldManager] processPendingDeletions: Failed to delete world folder $worldName: ${e.message}")
+                    }
+                } else {
+                    logger.info("[WorldManager] processPendingDeletions: World folder $worldName already deleted")
+                }
+            }
+
+            // Clear the pending deletions file
+            pendingDeletionsFile.delete()
+            logger.info("[WorldManager] processPendingDeletions: Completed - deleted $deletedCount of ${worldNames.size} world folders")
+
+        } catch (e: Exception) {
+            logger.severe("[WorldManager] processPendingDeletions: Error processing pending deletions: ${e.message}")
+            e.printStackTrace()
+        }
     }
 }

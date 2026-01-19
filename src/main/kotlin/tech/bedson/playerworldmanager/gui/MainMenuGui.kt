@@ -77,6 +77,9 @@ class MainMenuGui(
         // Pending Invites button
         gui.setItem(24, createPendingInvitesItem(player, pendingInviteCount))
 
+        // Return to Spawn button
+        gui.setItem(13, createReturnToSpawnItem(player))
+
         return gui
     }
 
@@ -124,6 +127,9 @@ class MainMenuGui(
 
         // Pending Invites button
         gui.setItem(6, 6, createPendingInvitesItem(player, pendingInviteCount))
+
+        // Return to Spawn button
+        gui.setItem(6, 5, createReturnToSpawnItem(player))
 
         return gui
     }
@@ -224,6 +230,46 @@ class MainMenuGui(
                 player.scheduler.run(plugin, { _ ->
                     InvitesGui(plugin, inviteManager).open(player)
                 }, null)
+            }
+    }
+
+    private fun createReturnToSpawnItem(player: Player): GuiItem {
+        return ItemBuilder.from(Material.COMPASS)
+            .name(Component.text("Return to Spawn", NamedTextColor.AQUA))
+            .lore(
+                listOf(
+                    Component.text("Teleport to the default world spawn", NamedTextColor.GRAY),
+                    Component.empty(),
+                    Component.text("Click to teleport", NamedTextColor.YELLOW)
+                )
+            )
+            .asGuiItem { event ->
+                event.isCancelled = true
+                plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} clicked Return to Spawn button")
+                player.closeInventory()
+
+                val defaultWorld = Bukkit.getWorlds().firstOrNull()
+                if (defaultWorld == null) {
+                    plugin.logger.warning("[GUI] MainMenuGui: No default world found for ${player.name}")
+                    player.sendMessage(Component.text("Default world not found", NamedTextColor.RED))
+                    return@asGuiItem
+                }
+
+                player.sendMessage(Component.text("Teleporting to spawn...", NamedTextColor.YELLOW))
+
+                player.teleportAsync(defaultWorld.spawnLocation).thenAccept { success ->
+                    player.scheduler.run(plugin, { _ ->
+                        if (success) {
+                            plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} teleported successfully to spawn")
+                            player.sendMessage(
+                                Component.text("Teleported to spawn", NamedTextColor.GREEN)
+                            )
+                        } else {
+                            plugin.logger.warning("[GUI] MainMenuGui: Failed to teleport ${player.name} to spawn")
+                            player.sendMessage(Component.text("Failed to teleport to spawn", NamedTextColor.RED))
+                        }
+                    }, null)
+                }
             }
     }
 }

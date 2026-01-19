@@ -50,6 +50,9 @@ class PlayerWorldManager : JavaPlugin() {
         // Load data
         dataManager.loadAll()
 
+        // Initialize world manager (processes pending deletions and loads worlds)
+        worldManager.initialize()
+
         // Register Brigadier commands via LifecycleEventManager
         registerCommands()
 

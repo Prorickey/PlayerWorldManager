@@ -4,7 +4,7 @@
 default-world: "world"
 
 # Maximum number of worlds a player can create
-max-worlds-per-player: 3
+max-worlds-per-player: 1
 
 # Chat settings
 chat:

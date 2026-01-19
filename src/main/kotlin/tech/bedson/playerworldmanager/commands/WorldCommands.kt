@@ -132,6 +132,10 @@ class WorldCommands(
             .then(Commands.literal("invites")
                 .executes(::handleInvites)
             )
+            // /world spawn
+            .then(Commands.literal("spawn")
+                .executes(::handleSpawn)
+            )
             // /world menu
             .then(Commands.literal("menu")
                 .executes(::handleMenu)
@@ -708,6 +712,39 @@ class WorldCommands(
         return Command.SINGLE_SUCCESS
     }
 
+    private fun handleSpawn(ctx: CommandContext<CommandSourceStack>): Int {
+        plugin.logger.info("[WorldCommands] handleSpawn: Executing world spawn command")
+
+        val player = ctx.source.sender as? Player ?: return sendPlayerOnlyError(ctx)
+
+        plugin.logger.info("[WorldCommands] handleSpawn: Player ${player.name} attempting to teleport to default world spawn")
+
+        val defaultWorld = Bukkit.getWorlds().firstOrNull()
+        if (defaultWorld == null) {
+            plugin.logger.warning("[WorldCommands] handleSpawn: No default world found")
+            player.sendMessage(Component.text("Default world not found", NamedTextColor.RED))
+            return Command.SINGLE_SUCCESS
+        }
+
+        player.sendMessage(Component.text("Teleporting to spawn...", NamedTextColor.YELLOW))
+
+        player.teleportAsync(defaultWorld.spawnLocation).thenAccept { success ->
+            player.scheduler.run(plugin, { _ ->
+                if (success) {
+                    plugin.logger.info("[WorldCommands] handleSpawn: Player ${player.name} teleported successfully to spawn")
+                    player.sendMessage(
+                        Component.text("Teleported to spawn", NamedTextColor.GREEN)
+                    )
+                } else {
+                    plugin.logger.warning("[WorldCommands] handleSpawn: Failed to teleport ${player.name} to spawn")
+                    player.sendMessage(Component.text("Failed to teleport to spawn", NamedTextColor.RED))
+                }
+            }, null)
+        }
+
+        return Command.SINGLE_SUCCESS
+    }
+
     private fun handleMenu(ctx: CommandContext<CommandSourceStack>): Int {
         plugin.logger.info("[WorldCommands] handleMenu: Executing world menu command")
 
@@ -767,6 +804,10 @@ class WorldCommands(
         sender.sendMessage(
             Component.text("/world invites", NamedTextColor.GRAY)
                 .append(Component.text(" - List pending invites", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world spawn", NamedTextColor.GRAY)
+                .append(Component.text(" - Return to default spawn", NamedTextColor.YELLOW))
         )
         sender.sendMessage(
             Component.text("/world menu", NamedTextColor.GRAY)

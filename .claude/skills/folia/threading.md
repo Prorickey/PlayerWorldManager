@@ -265,6 +265,44 @@ The `./gradlew runServer` task starts Paper, not Folia. For Folia testing:
 - Event handlers with entity access
 - Scheduled tasks after player disconnect
 
+## Unsupported Bukkit APIs
+
+Folia throws `UnsupportedOperationException` for several standard Bukkit APIs. These operations cannot be performed on Folia:
+
+### World Management
+
+```kotlin
+// UNSUPPORTED - throws UnsupportedOperationException
+Bukkit.unloadWorld(world, save)  // Cannot unload worlds on Folia!
+Bukkit.unloadWorld("worldName", save)  // Also unsupported
+
+// WORKAROUND for world deletion:
+// 1. Teleport all players out of the world first
+// 2. Mark world for deletion in your data store
+// 3. Delete world files on server restart (when world isn't loaded)
+// 4. Or use a scheduled task after server restart to clean up
+```
+
+### Scheduler APIs
+
+```kotlin
+// UNSUPPORTED - throws UnsupportedOperationException
+Bukkit.getScheduler().runTask(plugin) { }
+Bukkit.getScheduler().runTaskLater(plugin, runnable, delay)
+Bukkit.getScheduler().runTaskTimer(plugin, runnable, delay, period)
+
+// Use region schedulers instead (see schedulers.md)
+```
+
+### Other Unsupported APIs
+
+| API | Status | Workaround |
+|-----|--------|------------|
+| `Bukkit.getScheduler().*` | Unsupported | Use region/global/async schedulers |
+| `Bukkit.unloadWorld()` | Unsupported | Delete on restart or use NMS |
+| `player.teleport()` (sync) | Unsupported | Use `player.teleportAsync()` |
+| `World.getChunkAt()` (forced load) | Unsafe | Use async chunk loading |
+
 ## Resources
 
 - [Folia GitHub](https://github.com/PaperMC/Folia)

@@ -18,6 +18,8 @@ import tech.bedson.playerworldmanager.models.PlayerWorld
 import tech.bedson.playerworldmanager.models.TimeLock
 import tech.bedson.playerworldmanager.models.WeatherLock
 import tech.bedson.playerworldmanager.models.toSimpleLocation
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * World management GUI for world owners.
@@ -30,13 +32,17 @@ class WorldManageGui(
     private val dataManager: DataManager
 ) {
 
-    private var deleteClickCount = 0
-    private var lastDeleteClick = 0L
+    companion object {
+        private val pendingDeletes = ConcurrentHashMap<UUID, PendingDelete>()
+
+        data class PendingDelete(
+            val worldId: UUID,
+            val timestamp: Long
+        )
+    }
 
     fun open(player: Player, world: PlayerWorld) {
         plugin.logger.info("[GUI] WorldManageGui: Opening for player ${player.name}, world ${world.name}")
-        // Reset delete confirmation
-        deleteClickCount = 0
 
         val gui = Gui.gui()
             .title(Component.text("Manage: ${world.name}", NamedTextColor.GOLD))
@@ -337,6 +343,8 @@ class WorldManageGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} clicked Back to Main Menu")
+                // Clear pending delete confirmation when navigating away
+                pendingDeletes.remove(player.uniqueId)
                 player.closeInventory()
                 player.scheduler.run(plugin, { _ ->
                     MainMenuGui(plugin, worldManager, inviteManager, dataManager).open(player)
@@ -346,13 +354,14 @@ class WorldManageGui(
 
     private fun createDeleteItem(player: Player, world: PlayerWorld): GuiItem {
         val currentTime = System.currentTimeMillis()
+        val pendingDelete = pendingDeletes[player.uniqueId]
 
-        // Reset counter if too much time has passed (5 seconds)
-        if (currentTime - lastDeleteClick > 5000) {
-            deleteClickCount = 0
-        }
+        // Check if there's a pending delete for this player AND this world AND within 5 seconds
+        val hasPendingDelete = pendingDelete != null &&
+                pendingDelete.worldId == world.id &&
+                (currentTime - pendingDelete.timestamp) <= 5000
 
-        val needsConfirmation = deleteClickCount == 0
+        val needsConfirmation = !hasPendingDelete
         val material = if (needsConfirmation) Material.TNT else Material.BARRIER
         val name = if (needsConfirmation) "Delete World" else "Click again to confirm deletion"
         val color = if (needsConfirmation) NamedTextColor.RED else NamedTextColor.DARK_RED
@@ -373,9 +382,9 @@ class WorldManageGui(
             .asGuiItem { event ->
                 event.isCancelled = true
 
-                if (deleteClickCount == 0) {
-                    deleteClickCount = 1
-                    lastDeleteClick = currentTime
+                if (needsConfirmation) {
+                    // First click: add to pending deletes
+                    pendingDeletes[player.uniqueId] = PendingDelete(world.id, currentTime)
                     plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} clicked delete for world ${world.name} (first click)")
                     player.sendMessage(
                         Component.text("Click delete again to confirm deletion of ", NamedTextColor.YELLOW)
@@ -383,7 +392,8 @@ class WorldManageGui(
                     )
                     open(player, world) // Refresh GUI to show confirmation state
                 } else {
-                    // Delete the world
+                    // Second click: execute delete and remove from pending
+                    pendingDeletes.remove(player.uniqueId)
                     plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} confirmed deletion of world ${world.name}")
                     player.closeInventory()
                     player.sendMessage(

@@ -65,7 +65,7 @@ tasks.register<Exec>("downloadFolia") {
     group = "folia"
     description = "Download the latest Folia server JAR"
     workingDir = foliaDir.asFile
-    commandLine("bash", scriptsDir.file("download-server.sh").asFile.absolutePath, "1.21.4")
+    commandLine("bash", scriptsDir.file("download-server.sh").asFile.absolutePath)  // Fetches latest version automatically
     doFirst {
         foliaDir.asFile.mkdirs()
     }
@@ -218,9 +218,6 @@ paper {
     version = project.version.toString()
     description = "Create and manage personal worlds with friends"
     authors = listOf("prorickey")
-
-    // Commands are registered programmatically via Brigadier
-    // No commands section needed
 
     serverDependencies {
         register("PlaceholderAPI") {
