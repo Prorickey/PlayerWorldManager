@@ -56,7 +56,7 @@ class ChatCommands(
         )
         player.sendMessage(
             Component.text("Use ", NamedTextColor.GRAY)
-                .append(Component.text("/chat <global|world|both>", NamedTextColor.GOLD))
+                .append(Component.text("/chat <global|world>", NamedTextColor.GOLD))
                 .append(Component.text(" to change modes", NamedTextColor.GRAY))
         )
 
@@ -84,7 +84,7 @@ class ChatCommands(
             plugin.logger.warning("[ChatCommands] handleSetMode: Player ${player.name} provided invalid mode '$modeString'")
             player.sendMessage(
                 Component.text("Invalid chat mode. Valid modes: ", NamedTextColor.RED)
-                    .append(Component.text("global, world, both", NamedTextColor.GOLD))
+                    .append(Component.text("global, world", NamedTextColor.GOLD))
             )
             return Command.SINGLE_SUCCESS
         }
@@ -110,12 +110,6 @@ class ChatCommands(
                     Component.text("Your messages will only be visible to players in your current world", NamedTextColor.GRAY)
                 )
             }
-            ChatMode.BOTH -> {
-                plugin.logger.info("[ChatCommands] handleSetMode: Player ${player.name} set to BOTH mode")
-                player.sendMessage(
-                    Component.text("Your messages will be visible to all players globally and in your world", NamedTextColor.GRAY)
-                )
-            }
         }
 
         plugin.logger.info("[ChatCommands] handleSetMode: Command completed successfully for ${player.name}")
@@ -126,7 +120,7 @@ class ChatCommands(
         ctx: CommandContext<CommandSourceStack>,
         builder: SuggestionsBuilder
     ): CompletableFuture<Suggestions> {
-        listOf("global", "world", "both")
+        listOf("global", "world")
             .filter { it.startsWith(builder.remainingLowerCase) }
             .forEach { builder.suggest(it) }
         return builder.buildFuture()

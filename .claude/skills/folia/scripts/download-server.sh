@@ -59,8 +59,9 @@ if [ -z "$BUILD_DATA" ]; then
 fi
 
 # Get latest build if not specified (v3 API returns builds as array directly)
+# Sort by build ID to get the highest number, not just last in array
 if [ -z "$2" ]; then
-    BUILD=$(echo "$BUILD_DATA" | jq -r '.[-1].id')
+    BUILD=$(echo "$BUILD_DATA" | jq -r '[.[].id] | max')
     echo "Using latest build: $BUILD"
 else
     BUILD="$2"

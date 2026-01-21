@@ -11,6 +11,7 @@ import tech.bedson.playerworldmanager.gui.AdminMenuGui
 import tech.bedson.playerworldmanager.gui.MainMenuGui
 import tech.bedson.playerworldmanager.listeners.AccessListener
 import tech.bedson.playerworldmanager.listeners.ChatListener
+import tech.bedson.playerworldmanager.listeners.WorldSessionListener
 import tech.bedson.playerworldmanager.managers.ChatManager
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
@@ -135,6 +136,9 @@ class PlayerWorldManager : JavaPlugin() {
 
         // Chat listener
         pluginManager.registerEvents(ChatListener(this, chatManager, worldManager), this)
+
+        // World session persistence listener (saves location on quit, restores on join)
+        pluginManager.registerEvents(WorldSessionListener(this, worldManager, dataManager), this)
 
         logger.info("Listeners registered!")
     }

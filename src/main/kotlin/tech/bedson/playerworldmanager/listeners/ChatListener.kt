@@ -1,6 +1,8 @@
 package tech.bedson.playerworldmanager.listeners
 
 import io.papermc.paper.event.player.AsyncChatEvent
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
@@ -9,6 +11,7 @@ import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.managers.ChatManager
 import tech.bedson.playerworldmanager.managers.WorldManager
+import tech.bedson.playerworldmanager.models.ChatMode
 
 /**
  * Handles chat message routing based on player chat modes.
@@ -56,17 +59,22 @@ class ChatListener(
         event.viewers().clear()
         event.viewers().addAll(viewers)
 
-        // Add prefix to the message based on sender's mode
-        val prefix = chatManager.getChatPrefix(senderMode)
-
-        // Modify the renderer to add the prefix
-        val originalRenderer = event.renderer()
+        // Custom renderer with new chat format: [G|W] Username » message
         event.renderer { source, sourceDisplayName, message, viewer ->
-            // Call the original renderer to get the base message format
-            val originalMessage = originalRenderer.render(source, sourceDisplayName, message, viewer)
+            val prefix = when (senderMode) {
+                ChatMode.GLOBAL -> Component.text("[G] ", NamedTextColor.GRAY)
+                ChatMode.WORLD -> Component.text("[W] ", NamedTextColor.GRAY)
+            }
 
-            // Prepend the chat mode prefix
-            prefix.append(originalMessage)
+            val usernameColor = when (senderMode) {
+                ChatMode.GLOBAL -> NamedTextColor.GREEN
+                ChatMode.WORLD -> NamedTextColor.AQUA
+            }
+
+            prefix
+                .append(Component.text(source.name, usernameColor))
+                .append(Component.text(" \u00BB ", NamedTextColor.DARK_GRAY))
+                .append(message.color(NamedTextColor.WHITE))
         }
 
         plugin.logger.info("[ChatListener] AsyncChat: Message processing complete for '${sender.name}'")

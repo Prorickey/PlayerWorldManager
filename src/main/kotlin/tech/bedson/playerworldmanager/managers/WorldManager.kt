@@ -74,6 +74,13 @@ class WorldManager(
     // File to store worlds pending deletion (on Folia, we can't unload worlds dynamically)
     private val pendingDeletionsFile = File(plugin.dataFolder, "pending-deletions.txt")
 
+    // Track deleted world names in memory (Folia can't unload worlds, so they persist in Bukkit.getWorld())
+    // This prevents reusing stale cached worlds when creating new worlds with the same name
+    private val deletedWorldNames: MutableSet<String> = mutableSetOf()
+
+    // Track worlds that need to be removed from the database (orphaned entries with missing folders)
+    private val worldsToCleanup: MutableList<PlayerWorld> = mutableListOf()
+
     companion object {
         // World name suffixes for dimensions
         private const val NETHER_SUFFIX = "_nether"
@@ -82,6 +89,9 @@ class WorldManager(
 
     /**
      * Initialize the world manager - load all worlds on startup.
+     *
+     * IMPORTANT: This runs synchronously on the server thread during onEnable.
+     * We cannot use GlobalRegionScheduler here as it would cause a deadlock.
      */
     fun initialize() {
         logger.info("Initializing WorldManager...")
@@ -93,19 +103,18 @@ class WorldManager(
         val worlds = dataManager.getAllWorlds()
         logger.info("Found ${worlds.size} worlds to load")
 
-        // Load each world asynchronously
-        val futures = worlds.map { world ->
-            loadWorld(world).thenAccept { success ->
-                if (success) {
-                    logger.info("Loaded world: ${world.name} (owner: ${world.ownerName})")
-                } else {
-                    logger.warning("Failed to load world: ${world.name}")
-                }
+        // Load each world SYNCHRONOUSLY (we're on server thread, can't use scheduler)
+        worlds.forEach { world ->
+            val success = loadWorldSync(world)
+            if (success) {
+                logger.info("Loaded world: ${world.name} (owner: ${world.ownerName})")
+            } else {
+                logger.warning("Failed to load world: ${world.name}")
             }
         }
 
-        // Wait for all loads to complete
-        CompletableFuture.allOf(*futures.toTypedArray()).join()
+        // Process cleanup list for orphaned worlds (folders missing on disk)
+        processCleanupList()
 
         logger.info("WorldManager initialization complete")
     }
@@ -298,14 +307,17 @@ class WorldManager(
                             logger.info("[WorldManager] deleteWorld: Skipping world unload (not supported on Folia)")
                             logger.info("[WorldManager] deleteWorld: World will remain loaded until server restart")
 
-                            // Mark worlds as pending deletion
+                            // Mark worlds as pending deletion and track in memory
                             logger.info("[WorldManager] deleteWorld: Marking world '${world.name}' for deletion")
                             val worldNames = mutableListOf<String>()
                             for (env in World.Environment.entries) {
                                 val worldName = getWorldName(world, env)
                                 worldNames.add(worldName)
+                                // Track deleted names in memory to prevent reusing cached Bukkit worlds
+                                deletedWorldNames.add(worldName)
                             }
                             addPendingDeletions(worldNames)
+                            logger.info("[WorldManager] deleteWorld: Added ${worldNames.size} dimension names to deletedWorldNames set")
 
                             // Delete world folders from disk immediately
                             // The worlds will stay loaded in memory but files will be deleted
@@ -373,13 +385,24 @@ class WorldManager(
             return future
         }
 
+        // Check if overworld folder exists BEFORE scheduling async work (to avoid deadlock)
+        val overworldName = getWorldName(world, World.Environment.NORMAL)
+        val overworldFolder = File(plugin.server.worldContainer, overworldName)
+        if (!overworldFolder.exists()) {
+            logger.warning("[WorldManager] loadWorld: World folder '$overworldName' does not exist, skipping world '${world.name}'")
+            // Mark world as having missing files - will be cleaned up after initialization
+            markWorldForCleanup(world)
+            future.complete(false)
+            return future
+        }
+
         Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
             try {
                 var success = true
 
                 // Load overworld
-                val overworldName = getWorldName(world, World.Environment.NORMAL)
                 logger.info("[WorldManager] loadWorld: Loading overworld dimension '$overworldName'")
+
                 if (Bukkit.getWorld(overworldName) == null) {
                     val overworld = createOrLoadDimension(overworldName, World.Environment.NORMAL, world.worldType, world.seed)
                     if (overworld == null) {
@@ -392,32 +415,42 @@ class WorldManager(
                     logger.info("[WorldManager] loadWorld: Overworld '$overworldName' already loaded")
                 }
 
-                // Load nether
+                // Load nether (only if overworld loaded successfully)
                 val netherName = getWorldName(world, World.Environment.NETHER)
-                logger.info("[WorldManager] loadWorld: Loading nether dimension '$netherName'")
-                if (Bukkit.getWorld(netherName) == null) {
-                    val nether = createOrLoadDimension(netherName, World.Environment.NETHER, world.worldType, world.seed)
-                    if (nether == null) {
-                        logger.warning("[WorldManager] loadWorld: Failed to load nether: $netherName")
+                val netherFolder = File(plugin.server.worldContainer, netherName)
+                if (netherFolder.exists()) {
+                    logger.info("[WorldManager] loadWorld: Loading nether dimension '$netherName'")
+                    if (Bukkit.getWorld(netherName) == null) {
+                        val nether = createOrLoadDimension(netherName, World.Environment.NETHER, world.worldType, world.seed)
+                        if (nether == null) {
+                            logger.warning("[WorldManager] loadWorld: Failed to load nether: $netherName")
+                        } else {
+                            logger.info("[WorldManager] loadWorld: Successfully loaded nether '$netherName'")
+                        }
                     } else {
-                        logger.info("[WorldManager] loadWorld: Successfully loaded nether '$netherName'")
+                        logger.info("[WorldManager] loadWorld: Nether '$netherName' already loaded")
                     }
                 } else {
-                    logger.info("[WorldManager] loadWorld: Nether '$netherName' already loaded")
+                    logger.info("[WorldManager] loadWorld: Nether folder '$netherName' does not exist, skipping")
                 }
 
-                // Load end
+                // Load end (only if overworld loaded successfully)
                 val endName = getWorldName(world, World.Environment.THE_END)
-                logger.info("[WorldManager] loadWorld: Loading end dimension '$endName'")
-                if (Bukkit.getWorld(endName) == null) {
-                    val end = createOrLoadDimension(endName, World.Environment.THE_END, world.worldType, world.seed)
-                    if (end == null) {
-                        logger.warning("[WorldManager] loadWorld: Failed to load end: $endName")
+                val endFolder = File(plugin.server.worldContainer, endName)
+                if (endFolder.exists()) {
+                    logger.info("[WorldManager] loadWorld: Loading end dimension '$endName'")
+                    if (Bukkit.getWorld(endName) == null) {
+                        val end = createOrLoadDimension(endName, World.Environment.THE_END, world.worldType, world.seed)
+                        if (end == null) {
+                            logger.warning("[WorldManager] loadWorld: Failed to load end: $endName")
+                        } else {
+                            logger.info("[WorldManager] loadWorld: Successfully loaded end '$endName'")
+                        }
                     } else {
-                        logger.info("[WorldManager] loadWorld: Successfully loaded end '$endName'")
+                        logger.info("[WorldManager] loadWorld: End '$endName' already loaded")
                     }
                 } else {
-                    logger.info("[WorldManager] loadWorld: End '$endName' already loaded")
+                    logger.info("[WorldManager] loadWorld: End folder '$endName' does not exist, skipping")
                 }
 
                 // Apply world settings
@@ -437,6 +470,97 @@ class WorldManager(
         }
 
         return future
+    }
+
+    /**
+     * Load a world synchronously (for use during initialization on the server thread).
+     * This avoids the deadlock that occurs when using GlobalRegionScheduler during onEnable.
+     *
+     * @param world The world to load
+     * @return True if loaded successfully
+     */
+    private fun loadWorldSync(world: PlayerWorld): Boolean {
+        logger.info("[WorldManager] loadWorldSync: Loading world '${world.name}' (ID: ${world.id}, Owner: ${world.ownerName})")
+
+        if (!world.isEnabled) {
+            logger.info("[WorldManager] loadWorldSync: World '${world.name}' is disabled, skipping load")
+            return false
+        }
+
+        // Check if overworld folder exists
+        val overworldName = getWorldName(world, World.Environment.NORMAL)
+        val overworldFolder = File(plugin.server.worldContainer, overworldName)
+        if (!overworldFolder.exists()) {
+            logger.warning("[WorldManager] loadWorldSync: World folder '$overworldName' does not exist, skipping world '${world.name}'")
+            markWorldForCleanup(world)
+            return false
+        }
+
+        try {
+            var success = true
+
+            // Load overworld
+            logger.info("[WorldManager] loadWorldSync: Loading overworld dimension '$overworldName'")
+            if (Bukkit.getWorld(overworldName) == null) {
+                val overworld = createOrLoadDimension(overworldName, World.Environment.NORMAL, world.worldType, world.seed)
+                if (overworld == null) {
+                    logger.warning("[WorldManager] loadWorldSync: Failed to load overworld: $overworldName")
+                    success = false
+                } else {
+                    logger.info("[WorldManager] loadWorldSync: Successfully loaded overworld '$overworldName'")
+                }
+            } else {
+                logger.info("[WorldManager] loadWorldSync: Overworld '$overworldName' already loaded")
+            }
+
+            // Load nether
+            val netherName = getWorldName(world, World.Environment.NETHER)
+            val netherFolder = File(plugin.server.worldContainer, netherName)
+            if (netherFolder.exists()) {
+                logger.info("[WorldManager] loadWorldSync: Loading nether dimension '$netherName'")
+                if (Bukkit.getWorld(netherName) == null) {
+                    val nether = createOrLoadDimension(netherName, World.Environment.NETHER, world.worldType, world.seed)
+                    if (nether == null) {
+                        logger.warning("[WorldManager] loadWorldSync: Failed to load nether: $netherName")
+                    } else {
+                        logger.info("[WorldManager] loadWorldSync: Successfully loaded nether '$netherName'")
+                    }
+                } else {
+                    logger.info("[WorldManager] loadWorldSync: Nether '$netherName' already loaded")
+                }
+            }
+
+            // Load end
+            val endName = getWorldName(world, World.Environment.THE_END)
+            val endFolder = File(plugin.server.worldContainer, endName)
+            if (endFolder.exists()) {
+                logger.info("[WorldManager] loadWorldSync: Loading end dimension '$endName'")
+                if (Bukkit.getWorld(endName) == null) {
+                    val end = createOrLoadDimension(endName, World.Environment.THE_END, world.worldType, world.seed)
+                    if (end == null) {
+                        logger.warning("[WorldManager] loadWorldSync: Failed to load end: $endName")
+                    } else {
+                        logger.info("[WorldManager] loadWorldSync: Successfully loaded end '$endName'")
+                    }
+                } else {
+                    logger.info("[WorldManager] loadWorldSync: End '$endName' already loaded")
+                }
+            }
+
+            // Apply world settings
+            if (success) {
+                logger.info("[WorldManager] loadWorldSync: Applying world settings for '${world.name}'")
+                applyWorldSettings(world)
+            }
+
+            logger.info("[WorldManager] loadWorldSync: Load complete for world '${world.name}' - Success: $success")
+            return success
+
+        } catch (e: Exception) {
+            logger.severe("[WorldManager] loadWorldSync: Error loading world ${world.name}: ${e.message}")
+            e.printStackTrace()
+            return false
+        }
     }
 
     /**
@@ -512,6 +636,16 @@ class WorldManager(
         environment: World.Environment
     ): CompletableFuture<Boolean> {
         logger.info("[WorldManager] teleportToDimension: Teleporting player '${player.name}' to world '${world.name}' dimension $environment")
+
+        // Get the target Bukkit world name
+        val targetWorldName = getWorldName(world, environment)
+
+        // Same-world check: if player is already in the target world, do nothing
+        if (player.world.name == targetWorldName) {
+            logger.info("[WorldManager] teleportToDimension: Player '${player.name}' is already in world '$targetWorldName', skipping teleport")
+            return CompletableFuture.completedFuture(true)
+        }
+
         val future = CompletableFuture<Boolean>()
 
         val bukkitWorld = getBukkitWorld(world, environment)
@@ -521,14 +655,41 @@ class WorldManager(
             return future
         }
 
-        // Determine teleport location
+        // Save current location before teleporting (BEFORE the async teleport starts)
+        val playerData = dataManager.getOrCreatePlayerData(player.uniqueId, player.name)
+        val currentPlayerWorld = getPlayerWorldFromBukkitWorld(player.world)
+        if (currentPlayerWorld != null) {
+            val currentLoc = player.location
+            val locationData = LocationData(
+                worldName = player.world.name,
+                x = currentLoc.x,
+                y = currentLoc.y,
+                z = currentLoc.z,
+                yaw = currentLoc.yaw,
+                pitch = currentLoc.pitch
+            )
+            playerData.worldLocations[currentPlayerWorld.id] = locationData
+            // Save synchronously BEFORE teleporting to ensure location is persisted
+            dataManager.savePlayerData(playerData)
+            logger.info("[WorldManager] teleportToDimension: Saved player '${player.name}' location in world '${currentPlayerWorld.name}' dimension '${player.world.name}' (${currentLoc.x}, ${currentLoc.y}, ${currentLoc.z})")
+        }
+
+        // Determine teleport location - check for saved location first
+        val savedLocation = playerData.worldLocations[world.id]
         val location = when {
+            // Use saved location if it exists AND the saved location is in the target dimension
+            savedLocation != null && savedLocation.worldName == targetWorldName -> {
+                logger.info("[WorldManager] teleportToDimension: Using saved location for player '${player.name}' in '${world.name}' dimension '$targetWorldName' (${savedLocation.x}, ${savedLocation.y}, ${savedLocation.z})")
+                Location(bukkitWorld, savedLocation.x, savedLocation.y, savedLocation.z, savedLocation.yaw, savedLocation.pitch)
+            }
+            // Use custom spawn location for overworld if no saved location for this dimension
             environment == World.Environment.NORMAL && world.spawnLocation != null -> {
-                logger.info("[WorldManager] teleportToDimension: Using custom spawn location for '${world.name}'")
+                logger.info("[WorldManager] teleportToDimension: Using custom spawn location for '${world.name}' (no saved location for dimension '$targetWorldName')")
                 world.spawnLocation!!.toBukkitLocation(bukkitWorld)
             }
+            // Fall back to default spawn location
             else -> {
-                logger.info("[WorldManager] teleportToDimension: Using default spawn location for '${world.name}'")
+                logger.info("[WorldManager] teleportToDimension: Using default spawn location for '${world.name}' dimension '$targetWorldName'")
                 bukkitWorld.spawnLocation
             }
         }
@@ -536,14 +697,14 @@ class WorldManager(
         // Use async teleportation
         player.teleportAsync(location).thenAccept { success ->
             if (success) {
-                logger.info("[WorldManager] teleportToDimension: Successfully teleported player '${player.name}' to '${world.name}'")
+                logger.info("[WorldManager] teleportToDimension: Successfully teleported player '${player.name}' to '${world.name}' dimension '$targetWorldName'")
                 // Set player gamemode on entity scheduler
                 player.scheduler.run(plugin, { _ ->
                     logger.info("[WorldManager] teleportToDimension: Setting gamemode ${world.defaultGameMode} for player '${player.name}'")
                     player.gameMode = world.defaultGameMode
                 }, null)
             } else {
-                logger.warning("[WorldManager] teleportToDimension: Failed to teleport player '${player.name}' to '${world.name}'")
+                logger.warning("[WorldManager] teleportToDimension: Failed to teleport player '${player.name}' to '${world.name}' dimension '$targetWorldName'")
             }
             future.complete(success)
         }
@@ -754,11 +915,18 @@ class WorldManager(
             val craftServer = Bukkit.getServer() as CraftServer
             val console = craftServer.server as DedicatedServer
 
-            // Check if world already exists
+            // Check if world already exists in Bukkit
             val existingWorld = craftServer.getWorld(worldName)
             if (existingWorld != null) {
-                logger.warning("[WorldManager] createDimension: World '$worldName' already exists")
-                return existingWorld
+                // Check if this is a stale cached world from a deleted world (Folia can't unload worlds)
+                if (deletedWorldNames.contains(worldName)) {
+                    logger.info("[WorldManager] createDimension: Skipping cached deleted world '$worldName', will create fresh")
+                    deletedWorldNames.remove(worldName)
+                    // Continue to create fresh world - don't return the stale cached world
+                } else {
+                    logger.warning("[WorldManager] createDimension: World '$worldName' already exists")
+                    return existingWorld
+                }
             }
 
             // Determine the actual dimension key
@@ -938,11 +1106,6 @@ class WorldManager(
                 net.minecraft.resources.Identifier.fromNamespaceAndPath("playerworldmanager", worldName.lowercase())
             )
 
-            if(biomeProvider == null) {
-                logger.severe("[WorldManager] createDimension: Failed to create dimension $worldName: biomeprovider is null")
-                return null
-            }
-
             // Create the ServerLevel
             val serverLevel = ServerLevel(
                 console,
@@ -957,7 +1120,7 @@ class WorldManager(
                 true, // shouldTickTime
                 console.overworld().randomSequences,
                 environment,
-                generator as ChunkGenerator,
+                generator,
                 biomeProvider
             )
 
@@ -1050,6 +1213,52 @@ class WorldManager(
             logger.severe("[WorldManager] addPendingDeletions: Failed to write pending deletions: ${e.message}")
             e.printStackTrace()
         }
+    }
+
+    /**
+     * Mark a world for cleanup (removal from database).
+     * This is used when a world's folder doesn't exist on disk but the PlayerWorld entry exists.
+     *
+     * @param world The world to mark for cleanup
+     */
+    private fun markWorldForCleanup(world: PlayerWorld) {
+        worldsToCleanup.add(world)
+        logger.warning("[WorldManager] markWorldForCleanup: World '${world.name}' (owner: ${world.ownerName}) marked for cleanup - folder missing")
+    }
+
+    /**
+     * Process the cleanup list and remove orphaned world entries from the database.
+     * This should be called after all worlds have been loaded during initialization.
+     */
+    private fun processCleanupList() {
+        if (worldsToCleanup.isEmpty()) {
+            logger.info("[WorldManager] processCleanupList: No orphaned worlds to clean up")
+            return
+        }
+
+        logger.info("[WorldManager] processCleanupList: Processing ${worldsToCleanup.size} orphaned world(s)")
+
+        worldsToCleanup.forEach { world ->
+            try {
+                // Remove from data manager
+                dataManager.deleteWorld(world.id)
+
+                // Update player data
+                val playerData = dataManager.loadPlayerData(world.ownerUuid)
+                if (playerData != null) {
+                    playerData.ownedWorlds.remove(world.id)
+                    dataManager.savePlayerData(playerData)
+                }
+
+                logger.info("[WorldManager] processCleanupList: Removed orphaned world '${world.name}' (owner: ${world.ownerName}) from database")
+            } catch (e: Exception) {
+                logger.severe("[WorldManager] processCleanupList: Failed to clean up world '${world.name}': ${e.message}")
+                e.printStackTrace()
+            }
+        }
+
+        logger.info("[WorldManager] processCleanupList: Cleanup complete - removed ${worldsToCleanup.size} orphaned world(s)")
+        worldsToCleanup.clear()
     }
 
     /**

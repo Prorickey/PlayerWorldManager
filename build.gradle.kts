@@ -93,6 +93,36 @@ tasks.register<Copy>("deployPlugin") {
     }
 }
 
+// Configure server before running (EULA, server.properties, bukkit.yml)
+fun configureServer() {
+    val eulaFile = foliaDir.file("eula.txt").asFile
+    eulaFile.writeText("eula=true\n")
+
+    val worldsDir = foliaDir.dir("worlds").asFile
+    worldsDir.mkdirs()
+
+    val serverProps = foliaDir.file("server.properties").asFile
+    serverProps.writeText("""
+        online-mode=false
+        spawn-protection=0
+        max-players=20
+        level-name=world
+        gamemode=survival
+        difficulty=normal
+        allow-nether=true
+        enable-command-block=true
+        enable-rcon=true
+        rcon.port=25575
+        rcon.password=test
+    """.trimIndent())
+
+    val bukkitYml = foliaDir.file("bukkit.yml").asFile
+    bukkitYml.writeText("""
+        settings:
+          world-container: worlds
+    """.trimIndent())
+}
+
 // Run Folia server interactively
 tasks.register<Exec>("runFolia") {
     group = "folia"
@@ -105,6 +135,7 @@ tasks.register<Exec>("runFolia") {
         if (!foliaJar.asFile.exists()) {
             throw GradleException("Folia JAR not found. Run './gradlew downloadFolia' first.")
         }
+        configureServer()
     }
 }
 
@@ -144,13 +175,43 @@ tasks.named("testFolia") {
     finalizedBy("testPlugin")
 }
 
-// Clean up test server files (but keep the JAR and plugins)
-tasks.register<Delete>("cleanTestServer") {
+// Clean worlds and plugin data (keeps server JAR, configs, plugins)
+tasks.register<Delete>("serverClean") {
     group = "folia"
-    description = "Clean up test server files (logs, worlds) but keep the Folia JAR and plugins"
-    delete(fileTree(foliaDir) {
-        exclude("folia.jar", "plugins/**")
-    })
+    description = "Clean worlds and plugin data (keeps server JAR and plugins)"
+    delete(foliaDir.dir("worlds"))
+    delete(foliaDir.dir("world"))
+    delete(foliaDir.dir("world_nether"))
+    delete(foliaDir.dir("world_the_end"))
+    delete(foliaDir.dir("logs"))
+    delete(foliaDir.dir("plugins/PlayerWorldManager"))
+    delete(foliaDir.file("server.log"))
+    delete(foliaDir.file("server.pid"))
+    doFirst {
+        // Also delete any player world directories (pattern: *_*)
+        foliaDir.asFile.listFiles()?.filter { it.isDirectory && it.name.contains("_") }?.forEach {
+            it.deleteRecursively()
+        }
+        // Clean session.lock files
+        foliaDir.asFile.walkTopDown().filter { it.name == "session.lock" }.forEach { it.delete() }
+    }
+}
+
+// Clean everything in run directory (full reset)
+tasks.register("cleanAll") {
+    group = "folia"
+    description = "Delete everything in run directory (requires re-download of Folia)"
+    doLast {
+        foliaDir.asFile.listFiles()?.forEach { it.deleteRecursively() }
+        println("Run directory cleaned. Run './gradlew downloadFolia' to re-download.")
+    }
+}
+
+// Alias for backwards compatibility
+tasks.register("cleanTestServer") {
+    group = "folia"
+    description = "Alias for 'serverClean' task"
+    dependsOn("serverClean")
 }
 
 // RCON command execution
@@ -164,55 +225,38 @@ tasks.register<Exec>("rcon") {
     isIgnoreExitValue = true
 }
 
-// Start server in background for interactive testing
+// Start server in foreground (Ctrl+C to stop)
 tasks.register<Exec>("startServer") {
     group = "folia"
-    description = "Start Folia server in background with RCON enabled"
+    description = "Start Folia server (Ctrl+C to stop)"
     dependsOn("deployPlugin")
     workingDir = foliaDir.asFile
-    commandLine("bash", "-c", $$"""
-        $${scriptsDir.file("run-server.sh").asFile.absolutePath} &
-        echo $! > server.pid
-        echo "Server starting in background (PID: $(cat server.pid))"
-        echo "Waiting for server to be ready..."
-        sleep 15
-        echo "Server should be ready. Use './gradlew rcon -Pcmd=\"command\"' to send commands"
-        echo "Use './gradlew stopServer' to stop"
+    standardInput = System.`in`
+    commandLine("bash", "-c", """
+        # Remove stale locks
+        find . -name "session.lock" -delete 2>/dev/null || true
+
+        echo "Starting Folia server..."
+        echo "Press Ctrl+C to stop"
+        echo ""
+
+        # Start server in foreground
+        exec java -Xms512M -Xmx2G -XX:+UseG1GC -jar folia.jar --nogui
     """.trimIndent())
     doFirst {
         if (!foliaJar.asFile.exists()) {
             throw GradleException("Folia JAR not found. Run './gradlew downloadFolia' first.")
         }
+        configureServer()
     }
 }
 
-// Stop background server
-tasks.register<Exec>("stopServer") {
+// Fresh start: clean worlds then start server
+tasks.register("fresh") {
     group = "folia"
-    description = "Stop the background Folia server"
-    workingDir = foliaDir.asFile
-    commandLine("bash", "-c", $$"""
-        if [ -f server.pid ]; then
-            PID=$(cat server.pid)
-            echo "Sending stop command via RCON..."
-            python3 $$rconScript stop 2>/dev/null || true
-            sleep 5
-            if kill -0 $PID 2>/dev/null; then
-                echo "Server still running, sending SIGTERM..."
-                kill $PID 2>/dev/null || true
-                sleep 3
-            fi
-            if kill -0 $PID 2>/dev/null; then
-                echo "Force killing server..."
-                kill -9 $PID 2>/dev/null || true
-            fi
-            rm -f server.pid
-            echo "Server stopped"
-        else
-            echo "No server.pid file found"
-        fi
-    """.trimIndent())
-    isIgnoreExitValue = true
+    description = "Clean worlds, rebuild plugin, and start fresh"
+    dependsOn("serverClean")
+    finalizedBy("startServer")
 }
 
 paper {

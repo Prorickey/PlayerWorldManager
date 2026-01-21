@@ -15,6 +15,5 @@ data class ChatSettings(
  */
 enum class ChatMode {
     GLOBAL,  // Chat visible to all players
-    WORLD,   // Chat visible only to players in the same world
-    BOTH     // Chat visible both globally and in world
+    WORLD    // Chat visible only to players in the same world
 }

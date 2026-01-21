@@ -23,5 +23,6 @@ data class PlayerData(
     var worldLimit: Int = 1,                    // Max worlds this player can create
     val ownedWorlds: MutableList<UUID> = mutableListOf(),  // World IDs owned
     var chatSettings: ChatSettings = ChatSettings(uuid),
-    val worldLocations: MutableMap<UUID, LocationData> = mutableMapOf()  // Last location per world (keyed by world UUID)
+    val worldLocations: MutableMap<UUID, LocationData> = mutableMapOf(),  // Last location per world (keyed by world UUID)
+    var lastWorldId: UUID? = null               // Last plugin world the player was in (for join restoration)
 )

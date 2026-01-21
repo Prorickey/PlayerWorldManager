@@ -326,6 +326,52 @@ forEachPlayerSafe(plugin) { player ->
 }
 ```
 
+## Critical Gotchas
+
+### Deadlock with .join() on GlobalRegionScheduler
+
+**NEVER** call `.join()` on a `CompletableFuture` that depends on `GlobalRegionScheduler` from the main/server thread:
+
+```kotlin
+// ❌ DEADLOCK - Main thread blocks waiting for task that needs main thread
+fun initialize() {
+    val futures = worlds.map { world ->
+        loadWorld(world)  // Uses GlobalRegionScheduler internally
+    }
+    CompletableFuture.allOf(*futures.toTypedArray()).join()  // BLOCKS FOREVER
+}
+
+fun loadWorld(world: World): CompletableFuture<Boolean> {
+    val future = CompletableFuture<Boolean>()
+    Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+        // This never runs because main thread is blocked on .join()
+        future.complete(true)
+    }
+    return future
+}
+```
+
+**Fix**: Do synchronous checks BEFORE scheduling, or don't use `.join()`:
+
+```kotlin
+// ✅ CORRECT - Check synchronously, then schedule
+fun loadWorld(world: World): CompletableFuture<Boolean> {
+    val future = CompletableFuture<Boolean>()
+
+    // Synchronous check BEFORE scheduling
+    if (!worldFolder.exists()) {
+        future.complete(false)
+        return future  // Return immediately, no scheduling
+    }
+
+    Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+        // Only scheduled if folder exists
+        future.complete(true)
+    }
+    return future
+}
+```
+
 ## Common Patterns
 
 ### Event Handler with Scheduler

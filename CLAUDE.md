@@ -14,23 +14,62 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Folia Server Commands
 
+All server management is done through Gradle tasks. These tasks are defined in `build.gradle.kts`.
+
+### Core Tasks
+
+| Task | Description |
+|------|-------------|
+| `downloadFolia` | Download the latest Folia server JAR to `run/` |
+| `deployPlugin` | Build plugin and deploy to `run/plugins/` |
+| `startServer` | Start server in foreground (Ctrl+C to stop) |
+| `rcon -Pcmd="cmd"` | Send RCON command to running server |
+
+### Cleaning Tasks
+
+| Task | Description |
+|------|-------------|
+| `serverClean` | Remove worlds and plugin data (keeps JAR and plugins) |
+| `cleanAll` | Delete everything in run/ (requires re-download of Folia) |
+
+### Composite Tasks
+
+| Task | Description |
+|------|-------------|
+| `fresh` | Clean worlds, rebuild plugin, and start fresh |
+| `testFolia` | Download (if needed), build, deploy, and test loading |
+| `runFolia` | Run server interactively (foreground) |
+
+### Quick Reference
+
 ```bash
-# All-in-one: download (if needed), build, deploy, test (RECOMMENDED)
-./gradlew testFolia
+# First time setup
+./gradlew downloadFolia      # Download Folia JAR
+./gradlew startServer        # Start server (Ctrl+C to stop)
 
-# Individual tasks:
-./gradlew downloadFolia    # Download Folia server JAR to run/
-./gradlew deployPlugin     # Build plugin and deploy to run/plugins/
-./gradlew runFolia         # Run Folia server interactively
-./gradlew testPlugin       # Test plugin loading (auto start/stop)
-./gradlew cleanTestServer  # Clean up test files (keep JAR and plugins)
+# Development cycle
+./gradlew deployPlugin       # Rebuild plugin and deploy to run/plugins/
+./gradlew startServer        # Start server with updated plugin
 
-# RCON (Remote Console) - for interactive testing:
-./gradlew startServer              # Start server in background with RCON
-./gradlew rcon -Pcmd="list"        # Send command to running server
-./gradlew rcon -Pcmd="help world"  # Get help for plugin commands
-./gradlew stopServer               # Stop the background server
+# Fresh start (clean worlds)
+./gradlew fresh              # Clean worlds, rebuild, start
+
+# Send commands to running server (in a separate terminal)
+./gradlew rcon -Pcmd="list"
+./gradlew rcon -Pcmd="pwmtest status"
+./gradlew rcon -Pcmd="stop"
+
+# Full reset
+./gradlew cleanAll           # Delete everything
+./gradlew downloadFolia      # Re-download Folia
 ```
+
+### Server Configuration
+
+The `startServer` task automatically configures:
+- `eula.txt` - Auto-accepts EULA
+- `server.properties` - Sets `online-mode=false`, enables RCON on port 25575 (password: `test`)
+- `bukkit.yml` - Sets `world-container: worlds` (all worlds stored in `run/worlds/`)
 
 ## Architecture
 
@@ -76,17 +115,17 @@ Plugin configuration is in `src/main/resources/config.yml`. The `paper` block in
 
 When testing the plugin interactively:
 
-1. **ALWAYS start the server in background mode** using `run_in_background: true` parameter:
-   ```
+1. **Start the server in background mode**:
+   ```bash
    ./gradlew startServer  # Use run_in_background: true in Bash tool
    ```
-   This keeps your main thread free to send RCON commands and interact with the user.
+   This starts the server in the background. Wait ~30 seconds for the server to fully start before sending RCON commands.
 
-2. **Use RCON for command testing**:
+2. **Use RCON for command testing** (from a separate terminal or tool call):
    ```bash
    ./gradlew rcon -Pcmd="pwmtest status"    # Check plugin status
    ./gradlew rcon -Pcmd="pwmtest list"      # List all worlds
-   ./gradlew rcon -Pcmd="pwmtest create testworld normal"  # Create world (requires player online)
+   ./gradlew rcon -Pcmd="pwmtest create testworld normal"  # Create world
    ```
 
 3. **Console test commands** (`/pwmtest`) are available for automated testing:
@@ -99,7 +138,7 @@ When testing the plugin interactively:
 
 4. **Stop the server** when done:
    ```bash
-   ./gradlew stopServer
+   ./gradlew rcon -Pcmd="stop"  # Or press Ctrl+C if attached
    ```
 
 ## Skills

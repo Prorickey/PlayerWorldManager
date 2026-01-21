@@ -169,7 +169,9 @@ class WorldCommands(
                     player.sendMessage(
                         Component.text("World '", NamedTextColor.GREEN)
                             .append(Component.text(world.name, NamedTextColor.GOLD))
-                            .append(Component.text("' created successfully!", NamedTextColor.GREEN))
+                            .append(Component.text("' created! Use ", NamedTextColor.GREEN))
+                            .append(Component.text("/world tp ${world.name}", NamedTextColor.YELLOW))
+                            .append(Component.text(" to visit it.", NamedTextColor.GREEN))
                     )
                 }, null)
             }.onFailure { error ->
@@ -214,7 +216,9 @@ class WorldCommands(
                     player.sendMessage(
                         Component.text("World '", NamedTextColor.GREEN)
                             .append(Component.text(world.name, NamedTextColor.GOLD))
-                            .append(Component.text("' created successfully!", NamedTextColor.GREEN))
+                            .append(Component.text("' created! Use ", NamedTextColor.GREEN))
+                            .append(Component.text("/world tp ${world.name}", NamedTextColor.YELLOW))
+                            .append(Component.text(" to visit it.", NamedTextColor.GREEN))
                     )
                 }, null)
             }.onFailure { error ->
@@ -266,7 +270,9 @@ class WorldCommands(
                     player.sendMessage(
                         Component.text("World '", NamedTextColor.GREEN)
                             .append(Component.text(world.name, NamedTextColor.GOLD))
-                            .append(Component.text("' created successfully!", NamedTextColor.GREEN))
+                            .append(Component.text("' created! Use ", NamedTextColor.GREEN))
+                            .append(Component.text("/world tp ${world.name}", NamedTextColor.YELLOW))
+                            .append(Component.text(" to visit it.", NamedTextColor.GREEN))
                     )
                 }, null)
             }.onFailure { error ->

@@ -79,35 +79,25 @@ class ChatManager(
      * Determine if a receiver should see a message from a sender based on chat modes and worlds.
      *
      * Logic:
-     * - GLOBAL sender: Visible to GLOBAL and BOTH receivers
-     * - WORLD sender: Visible to WORLD and BOTH receivers in the same world
-     * - BOTH sender: Visible to everyone (GLOBAL part) + same-world WORLD receivers
+     * - GLOBAL sender: Message goes to ALL players (everyone can see global)
+     * - WORLD sender: Message goes only to players in the same world
      */
     fun shouldReceiveMessage(sender: Player, receiver: Player): Boolean {
         val senderMode = getChatMode(sender.uniqueId)
-        val receiverMode = getChatMode(receiver.uniqueId)
         val sameWorld = sender.world == receiver.world
 
         val result = when (senderMode) {
             ChatMode.GLOBAL -> {
-                // GLOBAL messages go to GLOBAL and BOTH receivers
-                receiverMode == ChatMode.GLOBAL || receiverMode == ChatMode.BOTH
+                // GLOBAL messages go to all players
+                true
             }
             ChatMode.WORLD -> {
-                // WORLD messages only go to same-world WORLD and BOTH receivers
-                sameWorld && (receiverMode == ChatMode.WORLD || receiverMode == ChatMode.BOTH)
-            }
-            ChatMode.BOTH -> {
-                // BOTH sends to everyone in global mode + same-world in world mode
-                when (receiverMode) {
-                    ChatMode.GLOBAL -> true  // Global part
-                    ChatMode.WORLD -> sameWorld  // World part
-                    ChatMode.BOTH -> true  // Receives both global and world
-                }
+                // WORLD messages only go to players in the same world
+                sameWorld
             }
         }
 
-        plugin.logger.info("[ChatManager] shouldReceiveMessage: Sender '${sender.name}' ($senderMode) -> Receiver '${receiver.name}' ($receiverMode), Same world: $sameWorld, Result: $result")
+        plugin.logger.info("[ChatManager] shouldReceiveMessage: Sender '${sender.name}' ($senderMode) -> Receiver '${receiver.name}', Same world: $sameWorld, Result: $result")
         return result
     }
 
@@ -118,7 +108,6 @@ class ChatManager(
         return when (mode) {
             ChatMode.GLOBAL -> Component.text("[G] ", NamedTextColor.GRAY)
             ChatMode.WORLD -> Component.text("[W] ", NamedTextColor.GREEN)
-            ChatMode.BOTH -> Component.text("[G+W] ", NamedTextColor.YELLOW)
         }
     }
 

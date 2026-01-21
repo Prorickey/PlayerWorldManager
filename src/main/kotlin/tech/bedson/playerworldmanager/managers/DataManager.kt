@@ -138,6 +138,41 @@ class DataManager(dataFolder: File, private val logger: Logger) {
     }
 
     /**
+     * Remove a world and clean up all related data.
+     * Used when a world's files are missing and it needs to be purged from the database.
+     */
+    fun cleanupOrphanedWorld(worldId: UUID) {
+        logger.info("[DataManager] cleanupOrphanedWorld: Removing orphaned world ID: $worldId")
+
+        // Remove from worlds map
+        val world = worlds.remove(worldId)
+        if (world != null) {
+            // Delete the world file
+            val worldFile = File(worldsFolder, "$worldId.json")
+            if (worldFile.exists()) {
+                worldFile.delete()
+                logger.info("[DataManager] cleanupOrphanedWorld: Deleted world file for '${world.name}'")
+            }
+
+            // Remove from owner's player data
+            val playerData = loadPlayerData(world.ownerUuid)
+            if (playerData != null) {
+                playerData.ownedWorlds.remove(worldId)
+                savePlayerData(playerData)
+                logger.info("[DataManager] cleanupOrphanedWorld: Removed world from owner's data")
+            }
+
+            // Remove any invites for this world
+            val invitesToRemove = invites.filter { it.worldId == worldId }
+            invites.removeAll(invitesToRemove)
+            if (invitesToRemove.isNotEmpty()) {
+                saveInvites()
+                logger.info("[DataManager] cleanupOrphanedWorld: Removed ${invitesToRemove.size} invites")
+            }
+        }
+    }
+
+    /**
      * Get all loaded worlds.
      */
     fun getAllWorlds(): List<PlayerWorld> {
