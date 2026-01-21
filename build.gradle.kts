@@ -1,3 +1,8 @@
+import io.papermc.paperweight.tasks.RemapJar
+import io.papermc.paperweight.userdev.ReobfArtifactConfiguration
+import net.minecrell.pluginyml.bukkit.BukkitPluginDescription
+import net.minecrell.pluginyml.paper.PaperPluginDescription
+
 plugins {
     kotlin("jvm") version "1.9.22"
     id("com.gradleup.shadow") version "9.3.1"
@@ -28,7 +33,7 @@ kotlin {
 
 // Use Mojang mappings for Paper plugins (recommended)
 paperweight.reobfArtifactConfiguration =
-    io.papermc.paperweight.userdev.ReobfArtifactConfiguration.MOJANG_PRODUCTION
+    ReobfArtifactConfiguration.MOJANG_PRODUCTION
 
 tasks {
     jar {
@@ -81,7 +86,7 @@ tasks.register<Copy>("deployPlugin") {
     group = "folia"
     description = "Copy the plugin JAR to the Folia server plugins folder"
     dependsOn("reobfJar")
-    from(tasks.named("reobfJar").map { (it as io.papermc.paperweight.tasks.RemapJar).outputJar })
+    from(tasks.named("reobfJar").map { (it as RemapJar).outputJar })
     into(pluginsDir)
     doFirst {
         pluginsDir.asFile.mkdirs()
@@ -149,7 +154,7 @@ tasks.register<Delete>("cleanTestServer") {
 }
 
 // RCON command execution
-val rconScript = scriptsDir.file("rcon.py").asFile.absolutePath
+val rconScript: String = scriptsDir.file("rcon.py").asFile.absolutePath
 
 // Send a single RCON command (use -Pcmd="command")
 tasks.register<Exec>("rcon") {
@@ -165,10 +170,10 @@ tasks.register<Exec>("startServer") {
     description = "Start Folia server in background with RCON enabled"
     dependsOn("deployPlugin")
     workingDir = foliaDir.asFile
-    commandLine("bash", "-c", """
-        ${scriptsDir.file("run-server.sh").asFile.absolutePath} &
-        echo ${'$'}! > server.pid
-        echo "Server starting in background (PID: ${'$'}(cat server.pid))"
+    commandLine("bash", "-c", $$"""
+        $${scriptsDir.file("run-server.sh").asFile.absolutePath} &
+        echo $! > server.pid
+        echo "Server starting in background (PID: $(cat server.pid))"
         echo "Waiting for server to be ready..."
         sleep 15
         echo "Server should be ready. Use './gradlew rcon -Pcmd=\"command\"' to send commands"
@@ -186,20 +191,20 @@ tasks.register<Exec>("stopServer") {
     group = "folia"
     description = "Stop the background Folia server"
     workingDir = foliaDir.asFile
-    commandLine("bash", "-c", """
+    commandLine("bash", "-c", $$"""
         if [ -f server.pid ]; then
-            PID=${'$'}(cat server.pid)
+            PID=$(cat server.pid)
             echo "Sending stop command via RCON..."
-            python3 $rconScript stop 2>/dev/null || true
+            python3 $$rconScript stop 2>/dev/null || true
             sleep 5
-            if kill -0 ${'$'}PID 2>/dev/null; then
+            if kill -0 $PID 2>/dev/null; then
                 echo "Server still running, sending SIGTERM..."
-                kill ${'$'}PID 2>/dev/null || true
+                kill $PID 2>/dev/null || true
                 sleep 3
             fi
-            if kill -0 ${'$'}PID 2>/dev/null; then
+            if kill -0 $PID 2>/dev/null; then
                 echo "Force killing server..."
-                kill -9 ${'$'}PID 2>/dev/null || true
+                kill -9 $PID 2>/dev/null || true
             fi
             rm -f server.pid
             echo "Server stopped"
@@ -222,22 +227,22 @@ paper {
     serverDependencies {
         register("PlaceholderAPI") {
             required = false
-            load = net.minecrell.pluginyml.paper.PaperPluginDescription.RelativeLoadOrder.BEFORE
+            load = PaperPluginDescription.RelativeLoadOrder.BEFORE
         }
     }
 
     permissions {
         register("playerworldmanager.create") {
             description = "Allows creating personal worlds"
-            default = net.minecrell.pluginyml.bukkit.BukkitPluginDescription.Permission.Default.TRUE
+            default = BukkitPluginDescription.Permission.Default.TRUE
         }
         register("playerworldmanager.admin") {
             description = "Admin permissions for world management"
-            default = net.minecrell.pluginyml.bukkit.BukkitPluginDescription.Permission.Default.OP
+            default = BukkitPluginDescription.Permission.Default.OP
         }
         register("playerworldmanager.admin.bypass") {
             description = "Bypass access restrictions for admin teleportation"
-            default = net.minecrell.pluginyml.bukkit.BukkitPluginDescription.Permission.Default.OP
+            default = BukkitPluginDescription.Permission.Default.OP
         }
     }
 }

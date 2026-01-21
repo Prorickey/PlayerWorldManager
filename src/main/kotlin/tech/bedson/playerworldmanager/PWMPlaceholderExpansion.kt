@@ -1,9 +1,7 @@
 package tech.bedson.playerworldmanager
 
 import me.clip.placeholderapi.expansion.PlaceholderExpansion
-import org.bukkit.Bukkit
 import org.bukkit.OfflinePlayer
-import org.bukkit.World
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager

@@ -2,19 +2,16 @@ package tech.bedson.playerworldmanager.managers
 
 import com.google.common.collect.ImmutableList
 import com.mojang.serialization.Dynamic
-import com.mojang.serialization.Lifecycle
 import net.minecraft.core.RegistryAccess
 import net.minecraft.core.registries.Registries
 import net.minecraft.nbt.NbtException
 import net.minecraft.nbt.ReportedNbtException
 import net.minecraft.resources.ResourceKey
-import net.minecraft.server.MinecraftServer
 import net.minecraft.server.WorldLoader
 import net.minecraft.server.dedicated.DedicatedServer
 import net.minecraft.server.dedicated.DedicatedServerProperties
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.util.GsonHelper
-import net.minecraft.util.datafix.DataFixers
 import net.minecraft.world.Difficulty
 import net.minecraft.world.entity.ai.village.VillageSiege
 import net.minecraft.world.entity.npc.CatSpawner
@@ -26,15 +23,11 @@ import net.minecraft.world.level.biome.BiomeManager
 import net.minecraft.world.level.dimension.LevelStem
 import net.minecraft.world.level.levelgen.PatrolSpawner
 import net.minecraft.world.level.levelgen.PhantomSpawner
-import net.minecraft.world.level.levelgen.WorldDimensions
 import net.minecraft.world.level.levelgen.WorldOptions
-import net.minecraft.world.level.storage.LevelDataAndDimensions
 import net.minecraft.world.level.storage.LevelStorageSource
 import net.minecraft.world.level.storage.PrimaryLevelData
 import net.minecraft.world.level.validation.ContentValidationException
 import org.bukkit.Bukkit
-import org.bukkit.GameMode
-import org.bukkit.GameRule
 import org.bukkit.GameRules
 import org.bukkit.Location
 import org.bukkit.World
@@ -46,17 +39,11 @@ import org.bukkit.generator.BiomeProvider
 import org.bukkit.generator.ChunkGenerator
 import org.bukkit.generator.WorldInfo
 import org.bukkit.plugin.java.JavaPlugin
-import tech.bedson.playerworldmanager.models.PlayerWorld
-import tech.bedson.playerworldmanager.models.TimeLock
-import tech.bedson.playerworldmanager.models.WeatherLock
-import tech.bedson.playerworldmanager.models.WorldType
-import tech.bedson.playerworldmanager.models.toBukkitLocation
-import tech.bedson.playerworldmanager.models.toSimpleLocation
+import tech.bedson.playerworldmanager.models.*
 import tech.bedson.playerworldmanager.utils.VoidGenerator
 import java.io.File
 import java.io.IOException
-import java.util.Locale
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.CompletableFuture
 import java.util.logging.Logger
 
@@ -680,7 +667,7 @@ class WorldManager(
 
         // Update Bukkit world spawn
         val bukkitWorld = getBukkitWorld(world)
-        bukkitWorld?.setSpawnLocation(location)
+        bukkitWorld?.spawnLocation = location
         logger.info("[WorldManager] setSpawnLocation: Successfully updated spawn location for '${world.name}'")
     }
 
@@ -826,7 +813,7 @@ class WorldManager(
                         return null
                     }
 
-                    if (!summary.isCompatible()) {
+                    if (!summary.isCompatible) {
                         logger.severe("[WorldManager] createDimension: World was created by incompatible version")
                         levelStorageAccess.close()
                         return null
@@ -941,7 +928,7 @@ class WorldManager(
             )
 
             // Set up biome provider if generator exists
-            if (biomeProvider == null && generator != null) {
+            if (generator != null) {
                 biomeProvider = generator.getDefaultBiomeProvider(worldInfo)
             }
 
@@ -950,6 +937,11 @@ class WorldManager(
                 Registries.DIMENSION,
                 net.minecraft.resources.Identifier.fromNamespaceAndPath("playerworldmanager", worldName.lowercase())
             )
+
+            if(biomeProvider == null) {
+                logger.severe("[WorldManager] createDimension: Failed to create dimension $worldName: biomeprovider is null")
+                return null
+            }
 
             // Create the ServerLevel
             val serverLevel = ServerLevel(
@@ -965,7 +957,7 @@ class WorldManager(
                 true, // shouldTickTime
                 console.overworld().randomSequences,
                 environment,
-                generator,
+                generator as ChunkGenerator,
                 biomeProvider
             )
 

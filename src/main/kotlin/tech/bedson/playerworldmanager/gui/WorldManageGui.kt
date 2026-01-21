@@ -17,7 +17,6 @@ import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
 import tech.bedson.playerworldmanager.models.TimeLock
 import tech.bedson.playerworldmanager.models.WeatherLock
-import tech.bedson.playerworldmanager.models.toSimpleLocation
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 

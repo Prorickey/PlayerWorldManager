@@ -80,7 +80,7 @@ class ChatCommands(
 
         val mode = try {
             ChatMode.valueOf(modeString)
-        } catch (e: IllegalArgumentException) {
+        } catch (_: IllegalArgumentException) {
             plugin.logger.warning("[ChatCommands] handleSetMode: Player ${player.name} provided invalid mode '$modeString'")
             player.sendMessage(
                 Component.text("Invalid chat mode. Valid modes: ", NamedTextColor.RED)

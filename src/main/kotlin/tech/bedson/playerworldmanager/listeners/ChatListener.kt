@@ -1,8 +1,6 @@
 package tech.bedson.playerworldmanager.listeners
 
 import io.papermc.paper.event.player.AsyncChatEvent
-import net.kyori.adventure.text.Component
-import org.bukkit.entity.Player
 import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
@@ -11,7 +9,6 @@ import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.managers.ChatManager
 import tech.bedson.playerworldmanager.managers.WorldManager
-import tech.bedson.playerworldmanager.models.ChatMode
 
 /**
  * Handles chat message routing based on player chat modes.

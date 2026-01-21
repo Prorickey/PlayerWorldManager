@@ -28,7 +28,6 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Brigadier command builder for /worldadmin command.
  */
-@Suppress("UnstableApiUsage")
 class WorldAdminCommands(
     private val plugin: JavaPlugin,
     private val worldManager: WorldManager,

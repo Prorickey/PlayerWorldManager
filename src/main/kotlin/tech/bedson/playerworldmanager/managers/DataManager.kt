@@ -17,7 +17,7 @@ import java.util.logging.Logger
  * - plugins/PlayerWorldManager/players/ - Individual player data JSON files
  * - plugins/PlayerWorldManager/invites.json - All pending invites
  */
-class DataManager(private val dataFolder: File, private val logger: Logger) {
+class DataManager(dataFolder: File, private val logger: Logger) {
 
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
 
