@@ -40,6 +40,7 @@ import org.bukkit.generator.ChunkGenerator
 import org.bukkit.generator.WorldInfo
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.models.*
+import tech.bedson.playerworldmanager.utils.DebugLogger
 import tech.bedson.playerworldmanager.utils.VoidGenerator
 import java.io.File
 import java.io.IOException
@@ -57,10 +58,12 @@ import java.util.logging.Logger
  */
 class WorldManager(
     private val plugin: JavaPlugin,
-    private val dataManager: DataManager
+    private val dataManager: DataManager,
+    private val worldStateManager: WorldStateManager
 ) {
 
     private val logger: Logger = plugin.logger
+    private val debugLogger = DebugLogger(plugin, "WorldManager")
 
     // World name validation regex (alphanumeric + underscores)
     private val namePattern = Regex("^[a-zA-Z0-9_]+$")
@@ -94,49 +97,67 @@ class WorldManager(
      * We cannot use GlobalRegionScheduler here as it would cause a deadlock.
      */
     fun initialize() {
+        debugLogger.debugMethodEntry("initialize")
         logger.info("Initializing WorldManager...")
 
+        debugLogger.debug("Processing pending deletions from previous server runs")
         // Process any pending deletions from previous server runs (before loading worlds)
         processPendingDeletions()
 
         // Load all worlds from data
         val worlds = dataManager.getAllWorlds()
         logger.info("Found ${worlds.size} worlds to load")
+        debugLogger.debug("Retrieved worlds from DataManager", "worldCount" to worlds.size)
 
         // Load each world SYNCHRONOUSLY (we're on server thread, can't use scheduler)
+        var successCount = 0
+        var failCount = 0
         worlds.forEach { world ->
+            debugLogger.debug("Loading world", "name" to world.name, "id" to world.id, "owner" to world.ownerName)
             val success = loadWorldSync(world)
             if (success) {
                 logger.info("Loaded world: ${world.name} (owner: ${world.ownerName})")
+                successCount++
             } else {
                 logger.warning("Failed to load world: ${world.name}")
+                failCount++
             }
         }
 
+        debugLogger.debug("World loading complete", "successCount" to successCount, "failCount" to failCount)
+
         // Process cleanup list for orphaned worlds (folders missing on disk)
+        debugLogger.debug("Processing cleanup list for orphaned worlds")
         processCleanupList()
 
         logger.info("WorldManager initialization complete")
+        debugLogger.debugMethodExit("initialize")
     }
 
     /**
      * Shutdown the world manager - save and unload all worlds.
      */
     fun shutdown() {
+        debugLogger.debugMethodEntry("shutdown")
         logger.info("Shutting down WorldManager...")
 
         val worlds = getLoadedWorlds()
         logger.info("Unloading ${worlds.size} worlds...")
+        debugLogger.debug("Preparing to unload worlds", "worldCount" to worlds.size)
+        debugLogger.debugState("shutdown", "loadedWorlds" to worlds.map { it.name })
 
         // Unload all worlds
         val futures = worlds.map { world ->
+            debugLogger.debug("Scheduling world unload", "worldName" to world.name, "worldId" to world.id)
             unloadWorld(world)
         }
 
+        debugLogger.debug("Waiting for all unloads to complete", "futureCount" to futures.size)
         // Wait for all unloads to complete
         CompletableFuture.allOf(*futures.toTypedArray()).join()
 
         logger.info("WorldManager shutdown complete")
+        debugLogger.debugMethodExit("shutdown")
     }
 
     /**
@@ -154,37 +175,60 @@ class WorldManager(
         worldType: WorldType,
         seed: Long? = null
     ): CompletableFuture<Result<PlayerWorld>> {
+        debugLogger.debugMethodEntry("createWorld",
+            "ownerName" to owner.name,
+            "ownerUuid" to owner.uniqueId,
+            "name" to name,
+            "worldType" to worldType,
+            "seed" to seed
+        )
         logger.info("[WorldManager] createWorld: Player '${owner.name}' attempting to create world '$name' (Type: $worldType, Seed: ${seed ?: "random"})")
         val future = CompletableFuture<Result<PlayerWorld>>()
 
         // Validate world name
+        debugLogger.debug("Validating world name", "name" to name)
         val validationError = validateWorldName(name)
         if (validationError != null) {
             logger.warning("[WorldManager] createWorld: Validation failed for world '$name': $validationError")
+            debugLogger.debug("World name validation failed", "name" to name, "error" to validationError)
+            debugLogger.debugMethodExit("createWorld", "failure: $validationError")
             future.complete(Result.failure(IllegalArgumentException(validationError)))
             return future
         }
+        debugLogger.debug("World name validation passed", "name" to name)
 
         // Check if player can create more worlds
+        val currentWorldCount = getWorldCount(owner.uniqueId)
+        val worldLimit = dataManager.loadPlayerData(owner.uniqueId)?.worldLimit ?: defaultWorldLimit
+        debugLogger.debug("Checking world limit", "currentCount" to currentWorldCount, "limit" to worldLimit)
         if (!canCreateWorld(owner)) {
             val limit = dataManager.loadPlayerData(owner.uniqueId)?.worldLimit ?: defaultWorldLimit
             logger.warning("[WorldManager] createWorld: Player '${owner.name}' has reached world limit ($limit worlds)")
+            debugLogger.debug("World limit reached", "player" to owner.name, "currentCount" to currentWorldCount, "limit" to limit)
+            debugLogger.debugMethodExit("createWorld", "failure: world limit reached")
             future.complete(Result.failure(IllegalStateException("You have reached your world limit ($limit worlds)")))
             return future
         }
+        debugLogger.debug("World limit check passed", "currentCount" to currentWorldCount, "limit" to worldLimit)
 
         // Check if world name already exists for this player
-        val existingWorld = dataManager.getWorldsByOwner(owner.uniqueId)
-            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+        val existingWorlds = dataManager.getWorldsByOwner(owner.uniqueId)
+        debugLogger.debug("Checking for existing world with same name", "existingWorldCount" to existingWorlds.size)
+        val existingWorld = existingWorlds.firstOrNull { it.name.equals(name, ignoreCase = true) }
         if (existingWorld != null) {
             logger.warning("[WorldManager] createWorld: Player '${owner.name}' already has a world named '$name'")
+            debugLogger.debug("Duplicate world name found", "existingWorldId" to existingWorld.id)
+            debugLogger.debugMethodExit("createWorld", "failure: duplicate name")
             future.complete(Result.failure(IllegalArgumentException("You already have a world named '$name'")))
             return future
         }
+        debugLogger.debug("No duplicate world name found")
 
         // Create PlayerWorld object
+        val worldId = UUID.randomUUID()
+        debugLogger.debug("Creating PlayerWorld object", "worldId" to worldId)
         val playerWorld = PlayerWorld(
-            id = UUID.randomUUID(),
+            id = worldId,
             name = name,
             ownerUuid = owner.uniqueId,
             ownerName = owner.name,
@@ -193,10 +237,20 @@ class WorldManager(
             createdAt = System.currentTimeMillis()
         )
         logger.info("[WorldManager] createWorld: Created PlayerWorld object with ID: ${playerWorld.id}")
+        debugLogger.debugState("playerWorld",
+            "id" to playerWorld.id,
+            "name" to playerWorld.name,
+            "ownerUuid" to playerWorld.ownerUuid,
+            "worldType" to playerWorld.worldType,
+            "seed" to playerWorld.seed,
+            "createdAt" to playerWorld.createdAt
+        )
 
         // Create worlds on global region scheduler
+        debugLogger.debug("Scheduling world creation on GlobalRegionScheduler")
         Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
             try {
+                debugLogger.debug("GlobalRegionScheduler task started for world creation", "worldName" to playerWorld.name)
                 logger.info("[WorldManager] createWorld: Creating overworld dimension for '${playerWorld.name}'")
                 // Create overworld
                 val overworldName = getWorldName(playerWorld, World.Environment.NORMAL)
@@ -246,15 +300,28 @@ class WorldManager(
                 applyWorldSettings(playerWorld)
 
                 logger.info("[WorldManager] createWorld: Successfully created world '${playerWorld.name}' for ${owner.name}")
+                debugLogger.debug("World creation successful",
+                    "worldName" to playerWorld.name,
+                    "worldId" to playerWorld.id,
+                    "owner" to owner.name
+                )
+                debugLogger.debugMethodExit("createWorld", "success: ${playerWorld.id}")
                 future.complete(Result.success(playerWorld))
 
             } catch (e: Exception) {
                 logger.severe("[WorldManager] createWorld: Error creating world '${playerWorld.name}': ${e.message}")
+                debugLogger.debug("World creation failed with exception",
+                    "worldName" to playerWorld.name,
+                    "exceptionType" to e.javaClass.simpleName,
+                    "exceptionMessage" to e.message
+                )
+                debugLogger.debugMethodExit("createWorld", "failure: ${e.message}")
                 e.printStackTrace()
                 future.complete(Result.failure(e))
             }
         }
 
+        debugLogger.debug("Returning future for async world creation")
         return future
     }
 
@@ -265,6 +332,18 @@ class WorldManager(
      * @return CompletableFuture with Result
      */
     fun deleteWorld(world: PlayerWorld): CompletableFuture<Result<Unit>> {
+        debugLogger.debugMethodEntry("deleteWorld",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "ownerName" to world.ownerName,
+            "ownerUuid" to world.ownerUuid
+        )
+        debugLogger.debugState("worldToDelete",
+            "name" to world.name,
+            "id" to world.id,
+            "type" to world.worldType,
+            "invitedPlayers" to world.invitedPlayers.size
+        )
         logger.info("[WorldManager] deleteWorld: Attempting to delete world '${world.name}' (ID: ${world.id}, Owner: ${world.ownerName})")
         val future = CompletableFuture<Result<Unit>>()
 
@@ -349,10 +428,18 @@ class WorldManager(
 
                             logger.info("[WorldManager] deleteWorld: Successfully deleted world '${world.name}' (owner: ${world.ownerName})")
                             logger.info("[WorldManager] deleteWorld: Note: World remains in memory until server restart")
+                            debugLogger.debug("World deletion successful", "worldName" to world.name, "worldId" to world.id)
+                            debugLogger.debugMethodExit("deleteWorld", "success")
                             future.complete(Result.success(Unit))
 
                         } catch (e: Exception) {
                             logger.severe("[WorldManager] deleteWorld: Error deleting world '${world.name}': ${e.message}")
+                            debugLogger.debug("World deletion failed with exception",
+                                "worldName" to world.name,
+                                "exceptionType" to e.javaClass.simpleName,
+                                "exceptionMessage" to e.message
+                            )
+                            debugLogger.debugMethodExit("deleteWorld", "failure: ${e.message}")
                             e.printStackTrace()
                             future.complete(Result.failure(e))
                         }
@@ -361,11 +448,18 @@ class WorldManager(
 
             } catch (e: Exception) {
                 logger.severe("[WorldManager] deleteWorld: Error in initial deletion phase for world '${world.name}': ${e.message}")
+                debugLogger.debug("World deletion initial phase failed",
+                    "worldName" to world.name,
+                    "exceptionType" to e.javaClass.simpleName,
+                    "exceptionMessage" to e.message
+                )
+                debugLogger.debugMethodExit("deleteWorld", "failure: ${e.message}")
                 e.printStackTrace()
                 future.complete(Result.failure(e))
             }
         }
 
+        debugLogger.debug("Returning future for async world deletion")
         return future
     }
 
@@ -376,11 +470,19 @@ class WorldManager(
      * @return CompletableFuture with success status
      */
     fun loadWorld(world: PlayerWorld): CompletableFuture<Boolean> {
+        debugLogger.debugMethodEntry("loadWorld",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "ownerName" to world.ownerName,
+            "isEnabled" to world.isEnabled
+        )
         logger.info("[WorldManager] loadWorld: Loading world '${world.name}' (ID: ${world.id}, Owner: ${world.ownerName})")
         val future = CompletableFuture<Boolean>()
 
         if (!world.isEnabled) {
             logger.info("[WorldManager] loadWorld: World '${world.name}' is disabled, skipping load")
+            debugLogger.debug("World is disabled, skipping load", "worldName" to world.name)
+            debugLogger.debugMethodExit("loadWorld", false)
             future.complete(false)
             return future
         }
@@ -388,10 +490,17 @@ class WorldManager(
         // Check if overworld folder exists BEFORE scheduling async work (to avoid deadlock)
         val overworldName = getWorldName(world, World.Environment.NORMAL)
         val overworldFolder = File(plugin.server.worldContainer, overworldName)
+        debugLogger.debug("Checking world folder existence",
+            "overworldName" to overworldName,
+            "folderPath" to overworldFolder.absolutePath,
+            "exists" to overworldFolder.exists()
+        )
         if (!overworldFolder.exists()) {
             logger.warning("[WorldManager] loadWorld: World folder '$overworldName' does not exist, skipping world '${world.name}'")
+            debugLogger.debug("World folder missing, marking for cleanup", "worldName" to world.name)
             // Mark world as having missing files - will be cleaned up after initialization
             markWorldForCleanup(world)
+            debugLogger.debugMethodExit("loadWorld", false)
             future.complete(false)
             return future
         }
@@ -460,15 +569,24 @@ class WorldManager(
                 }
 
                 logger.info("[WorldManager] loadWorld: Load complete for world '${world.name}' - Success: $success")
+                debugLogger.debug("World load complete", "worldName" to world.name, "success" to success)
+                debugLogger.debugMethodExit("loadWorld", success)
                 future.complete(success)
 
             } catch (e: Exception) {
                 logger.severe("[WorldManager] loadWorld: Error loading world ${world.name}: ${e.message}")
+                debugLogger.debug("World load failed with exception",
+                    "worldName" to world.name,
+                    "exceptionType" to e.javaClass.simpleName,
+                    "exceptionMessage" to e.message
+                )
+                debugLogger.debugMethodExit("loadWorld", false)
                 e.printStackTrace()
                 future.complete(false)
             }
         }
 
+        debugLogger.debug("Returning future for async world load")
         return future
     }
 
@@ -480,19 +598,35 @@ class WorldManager(
      * @return True if loaded successfully
      */
     private fun loadWorldSync(world: PlayerWorld): Boolean {
+        debugLogger.debugMethodEntry("loadWorldSync",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "ownerName" to world.ownerName,
+            "isEnabled" to world.isEnabled,
+            "worldType" to world.worldType
+        )
         logger.info("[WorldManager] loadWorldSync: Loading world '${world.name}' (ID: ${world.id}, Owner: ${world.ownerName})")
 
         if (!world.isEnabled) {
             logger.info("[WorldManager] loadWorldSync: World '${world.name}' is disabled, skipping load")
+            debugLogger.debug("World is disabled, skipping sync load", "worldName" to world.name)
+            debugLogger.debugMethodExit("loadWorldSync", false)
             return false
         }
 
         // Check if overworld folder exists
         val overworldName = getWorldName(world, World.Environment.NORMAL)
         val overworldFolder = File(plugin.server.worldContainer, overworldName)
+        debugLogger.debug("Checking overworld folder for sync load",
+            "overworldName" to overworldName,
+            "folderPath" to overworldFolder.absolutePath,
+            "exists" to overworldFolder.exists()
+        )
         if (!overworldFolder.exists()) {
             logger.warning("[WorldManager] loadWorldSync: World folder '$overworldName' does not exist, skipping world '${world.name}'")
+            debugLogger.debug("Overworld folder missing, marking for cleanup", "worldName" to world.name)
             markWorldForCleanup(world)
+            debugLogger.debugMethodExit("loadWorldSync", false)
             return false
         }
 
@@ -554,10 +688,18 @@ class WorldManager(
             }
 
             logger.info("[WorldManager] loadWorldSync: Load complete for world '${world.name}' - Success: $success")
+            debugLogger.debug("Sync load complete", "worldName" to world.name, "success" to success)
+            debugLogger.debugMethodExit("loadWorldSync", success)
             return success
 
         } catch (e: Exception) {
             logger.severe("[WorldManager] loadWorldSync: Error loading world ${world.name}: ${e.message}")
+            debugLogger.debug("Sync load failed with exception",
+                "worldName" to world.name,
+                "exceptionType" to e.javaClass.simpleName,
+                "exceptionMessage" to e.message
+            )
+            debugLogger.debugMethodExit("loadWorldSync", false)
             e.printStackTrace()
             return false
         }
@@ -570,38 +712,72 @@ class WorldManager(
      * @return CompletableFuture with success status
      */
     fun unloadWorld(world: PlayerWorld): CompletableFuture<Boolean> {
+        debugLogger.debugMethodEntry("unloadWorld",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "ownerName" to world.ownerName
+        )
         val future = CompletableFuture<Boolean>()
 
+        debugLogger.debug("Scheduling world unload on GlobalRegionScheduler")
         Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
             try {
                 var success = true
+                debugLogger.debug("GlobalRegionScheduler task started for world unload", "worldName" to world.name)
 
                 // Unload all dimensions
                 for (env in World.Environment.entries) {
                     val worldName = getWorldName(world, env)
                     val bukkitWorld = Bukkit.getWorld(worldName)
+                    debugLogger.debug("Checking dimension for unload",
+                        "environment" to env,
+                        "worldName" to worldName,
+                        "isLoaded" to (bukkitWorld != null)
+                    )
                     if (bukkitWorld != null) {
                         // Kick players before unloading
                         val defaultWorld = Bukkit.getWorlds().firstOrNull()
+                        val playerCount = bukkitWorld.players.size
+                        debugLogger.debug("Players in dimension",
+                            "worldName" to worldName,
+                            "playerCount" to playerCount
+                        )
                         if (defaultWorld != null && bukkitWorld.players.isNotEmpty()) {
+                            debugLogger.debug("Teleporting players out of dimension",
+                                "playerNames" to bukkitWorld.players.map { it.name },
+                                "destination" to defaultWorld.name
+                            )
                             val teleportFutures = bukkitWorld.players.map { player ->
                                 player.teleportAsync(defaultWorld.spawnLocation)
                             }
                             CompletableFuture.allOf(*teleportFutures.toTypedArray()).join()
+                            debugLogger.debug("All players teleported from dimension", "worldName" to worldName)
                         }
 
                         // Unload with save
+                        debugLogger.debug("Attempting to unload dimension", "worldName" to worldName, "withSave" to true)
                         if (!Bukkit.unloadWorld(bukkitWorld, true)) {
                             logger.warning("Failed to unload world: $worldName")
+                            debugLogger.debug("Dimension unload failed", "worldName" to worldName)
                             success = false
+                        } else {
+                            debugLogger.debug("Dimension unloaded successfully", "worldName" to worldName)
                         }
                     }
                 }
 
+                debugLogger.debug("World unload complete", "worldName" to world.name, "success" to success)
+                debugLogger.debugMethodExit("unloadWorld", success)
                 future.complete(success)
 
             } catch (e: Exception) {
                 logger.severe("Error unloading world ${world.name}: ${e.message}")
+                debugLogger.debug("World unload failed with exception",
+                    "worldName" to world.name,
+                    "exceptionType" to e.javaClass.simpleName,
+                    "exceptionMessage" to e.message
+                )
+                debugLogger.debugMethodExit("unloadWorld", false)
                 e.printStackTrace()
                 future.complete(false)
             }
@@ -618,8 +794,133 @@ class WorldManager(
      * @return CompletableFuture with success status
      */
     fun teleportToWorld(player: Player, world: PlayerWorld): CompletableFuture<Boolean> {
+        debugLogger.debugMethodEntry("teleportToWorld",
+            "playerName" to player.name,
+            "playerUuid" to player.uniqueId,
+            "worldName" to world.name,
+            "worldId" to world.id
+        )
         logger.info("[WorldManager] teleportToWorld: Teleporting player '${player.name}' to world '${world.name}'")
-        return teleportToDimension(player, world, World.Environment.NORMAL)
+        val result = teleportToDimension(player, world, World.Environment.NORMAL)
+        debugLogger.debug("Delegating to teleportToDimension", "environment" to World.Environment.NORMAL)
+        return result
+    }
+
+    /**
+     * Teleport player to the first vanilla (non-plugin) world.
+     *
+     * @param player The player to teleport
+     * @return CompletableFuture with success status
+     */
+    fun teleportToVanillaWorld(player: Player): CompletableFuture<Boolean> {
+        debugLogger.debugMethodEntry("teleportToVanillaWorld",
+            "playerName" to player.name,
+            "playerUuid" to player.uniqueId,
+            "currentWorld" to player.world.name
+        )
+        logger.info("[WorldManager] teleportToVanillaWorld: Teleporting player '${player.name}' to vanilla world")
+        val future = CompletableFuture<Boolean>()
+
+        // Get the first vanilla world
+        val allWorlds = Bukkit.getWorlds()
+        debugLogger.debug("Finding vanilla world", "totalWorlds" to allWorlds.size)
+        val vanillaWorld = allWorlds.firstOrNull { !isPluginWorld(it) }
+        if (vanillaWorld == null) {
+            logger.warning("[WorldManager] teleportToVanillaWorld: No vanilla world found")
+            debugLogger.debug("No vanilla world found")
+            debugLogger.debugMethodExit("teleportToVanillaWorld", false)
+            future.complete(false)
+            return future
+        }
+        debugLogger.debug("Found vanilla world", "vanillaWorldName" to vanillaWorld.name)
+
+        val vanillaWorldName = vanillaWorld.name
+        val currentWorldName = player.world.name
+
+        // Same-world check: if player is already in the vanilla world, do nothing
+        if (currentWorldName == vanillaWorldName) {
+            logger.info("[WorldManager] teleportToVanillaWorld: Player '${player.name}' is already in vanilla world '$vanillaWorldName', skipping teleport")
+            debugLogger.debug("Player already in vanilla world, skipping teleport",
+                "playerName" to player.name,
+                "worldName" to vanillaWorldName
+            )
+            debugLogger.debugMethodExit("teleportToVanillaWorld", true)
+            future.complete(true)
+            return future
+        }
+
+        // STEP 1: Save FULL player state for current world BEFORE teleporting
+        logger.info("[WorldManager] teleportToVanillaWorld: Saving full state for '${player.name}' in '$currentWorldName'")
+        debugLogger.debug("Saving player state before teleport",
+            "playerName" to player.name,
+            "currentWorld" to currentWorldName
+        )
+        worldStateManager.savePlayerState(player, currentWorldName)
+
+        // STEP 2: Determine teleport location
+        val savedState = worldStateManager.getSavedLocation(player.uniqueId, vanillaWorldName)
+        debugLogger.debug("Checking for saved location",
+            "targetWorld" to vanillaWorldName,
+            "hasSavedState" to (savedState != null)
+        )
+        val location = if (savedState != null) {
+            logger.info("[WorldManager] teleportToVanillaWorld: Using saved location for '${player.name}' in '$vanillaWorldName'")
+            debugLogger.debug("Using saved location",
+                "x" to savedState.x, "y" to savedState.y, "z" to savedState.z,
+                "yaw" to savedState.yaw, "pitch" to savedState.pitch
+            )
+            Location(vanillaWorld, savedState.x, savedState.y, savedState.z, savedState.yaw, savedState.pitch)
+        } else {
+            logger.info("[WorldManager] teleportToVanillaWorld: Using world spawn for '$vanillaWorldName' (first visit)")
+            val spawn = vanillaWorld.spawnLocation
+            debugLogger.debug("Using world spawn (first visit)",
+                "x" to spawn.x, "y" to spawn.y, "z" to spawn.z
+            )
+            spawn
+        }
+
+        // Check if this is first time in vanilla world
+        val isFirstVisit = !worldStateManager.hasStateForWorld(player.uniqueId, vanillaWorldName)
+        debugLogger.debug("First visit check", "isFirstVisit" to isFirstVisit)
+
+        // STEP 3: Teleport async
+        debugLogger.debug("Initiating async teleport",
+            "destination" to vanillaWorldName,
+            "x" to location.x, "y" to location.y, "z" to location.z
+        )
+        player.teleportAsync(location).thenAccept { success ->
+            if (success) {
+                logger.info("[WorldManager] teleportToVanillaWorld: Teleport successful for '${player.name}' to '$vanillaWorldName'")
+                debugLogger.debug("Async teleport successful", "playerName" to player.name, "destination" to vanillaWorldName)
+
+                // STEP 4: Restore or clear state on entity scheduler (after teleport completes)
+                debugLogger.debug("Scheduling state restoration on entity scheduler")
+                player.scheduler.run(plugin, { _ ->
+                    if (isFirstVisit) {
+                        // First time in vanilla world - clear to fresh state
+                        logger.info("[WorldManager] teleportToVanillaWorld: First visit to '$vanillaWorldName', clearing player state")
+                        debugLogger.debug("First visit - clearing player state", "worldName" to vanillaWorldName)
+                        worldStateManager.clearPlayerState(player)
+                        // Save the cleared state so future visits restore it (not treated as first visit again)
+                        worldStateManager.savePlayerState(player, vanillaWorldName)
+                        debugLogger.debug("Saved cleared state for future visits")
+                    } else {
+                        // Returning to vanilla world - restore saved state
+                        logger.info("[WorldManager] teleportToVanillaWorld: Restoring state for '${player.name}' in '$vanillaWorldName'")
+                        debugLogger.debug("Returning visit - restoring saved state", "worldName" to vanillaWorldName)
+                        worldStateManager.restorePlayerState(player, vanillaWorldName)
+                    }
+                    debugLogger.debugMethodExit("teleportToVanillaWorld", true)
+                }, null)
+            } else {
+                logger.warning("[WorldManager] teleportToVanillaWorld: Failed to teleport '${player.name}' to '$vanillaWorldName'")
+                debugLogger.debug("Async teleport failed", "playerName" to player.name)
+                debugLogger.debugMethodExit("teleportToVanillaWorld", false)
+            }
+            future.complete(success)
+        }
+
+        return future
     }
 
     /**
@@ -635,76 +936,129 @@ class WorldManager(
         world: PlayerWorld,
         environment: World.Environment
     ): CompletableFuture<Boolean> {
+        debugLogger.debugMethodEntry("teleportToDimension",
+            "playerName" to player.name,
+            "playerUuid" to player.uniqueId,
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "environment" to environment
+        )
         logger.info("[WorldManager] teleportToDimension: Teleporting player '${player.name}' to world '${world.name}' dimension $environment")
 
         // Get the target Bukkit world name
         val targetWorldName = getWorldName(world, environment)
+        val currentWorldName = player.world.name
+        debugLogger.debug("World name resolution",
+            "targetWorldName" to targetWorldName,
+            "currentWorldName" to currentWorldName
+        )
 
         // Same-world check: if player is already in the target world, do nothing
-        if (player.world.name == targetWorldName) {
+        if (currentWorldName == targetWorldName) {
             logger.info("[WorldManager] teleportToDimension: Player '${player.name}' is already in world '$targetWorldName', skipping teleport")
+            debugLogger.debug("Player already in target world, skipping", "worldName" to targetWorldName)
+            debugLogger.debugMethodExit("teleportToDimension", true)
             return CompletableFuture.completedFuture(true)
         }
 
         val future = CompletableFuture<Boolean>()
 
         val bukkitWorld = getBukkitWorld(world, environment)
+        debugLogger.debug("Bukkit world lookup", "found" to (bukkitWorld != null), "targetWorldName" to targetWorldName)
         if (bukkitWorld == null) {
             logger.warning("[WorldManager] teleportToDimension: Bukkit world not loaded for '${world.name}' dimension $environment")
+            debugLogger.debug("Bukkit world not found/loaded", "worldName" to world.name, "environment" to environment)
+            debugLogger.debugMethodExit("teleportToDimension", false)
             future.complete(false)
             return future
         }
 
-        // Save current location before teleporting (BEFORE the async teleport starts)
-        val playerData = dataManager.getOrCreatePlayerData(player.uniqueId, player.name)
-        val currentPlayerWorld = getPlayerWorldFromBukkitWorld(player.world)
-        if (currentPlayerWorld != null) {
-            val currentLoc = player.location
-            val locationData = LocationData(
-                worldName = player.world.name,
-                x = currentLoc.x,
-                y = currentLoc.y,
-                z = currentLoc.z,
-                yaw = currentLoc.yaw,
-                pitch = currentLoc.pitch
-            )
-            playerData.worldLocations[currentPlayerWorld.id] = locationData
-            // Save synchronously BEFORE teleporting to ensure location is persisted
-            dataManager.savePlayerData(playerData)
-            logger.info("[WorldManager] teleportToDimension: Saved player '${player.name}' location in world '${currentPlayerWorld.name}' dimension '${player.world.name}' (${currentLoc.x}, ${currentLoc.y}, ${currentLoc.z})")
-        }
+        // STEP 1: Save FULL player state for current world BEFORE teleporting
+        logger.info("[WorldManager] teleportToDimension: Saving full state for '${player.name}' in '$currentWorldName'")
+        debugLogger.debug("Saving player state before dimension teleport", "currentWorld" to currentWorldName)
+        worldStateManager.savePlayerState(player, currentWorldName)
 
-        // Determine teleport location - check for saved location first
-        val savedLocation = playerData.worldLocations[world.id]
+        // STEP 2: Determine teleport location
+        val savedState = worldStateManager.getSavedLocation(player.uniqueId, targetWorldName)
+        debugLogger.debug("Checking for saved state in target world",
+            "targetWorld" to targetWorldName,
+            "hasSavedState" to (savedState != null),
+            "hasCustomSpawn" to (world.spawnLocation != null)
+        )
         val location = when {
-            // Use saved location if it exists AND the saved location is in the target dimension
-            savedLocation != null && savedLocation.worldName == targetWorldName -> {
-                logger.info("[WorldManager] teleportToDimension: Using saved location for player '${player.name}' in '${world.name}' dimension '$targetWorldName' (${savedLocation.x}, ${savedLocation.y}, ${savedLocation.z})")
-                Location(bukkitWorld, savedLocation.x, savedLocation.y, savedLocation.z, savedLocation.yaw, savedLocation.pitch)
+            // Use saved location if player has been to this world before
+            savedState != null -> {
+                logger.info("[WorldManager] teleportToDimension: Using saved location for '${player.name}' in '$targetWorldName'")
+                debugLogger.debug("Using saved location",
+                    "x" to savedState.x, "y" to savedState.y, "z" to savedState.z,
+                    "yaw" to savedState.yaw, "pitch" to savedState.pitch
+                )
+                Location(bukkitWorld, savedState.x, savedState.y, savedState.z, savedState.yaw, savedState.pitch)
             }
-            // Use custom spawn location for overworld if no saved location for this dimension
+            // Use custom spawn location for overworld if first visit
             environment == World.Environment.NORMAL && world.spawnLocation != null -> {
-                logger.info("[WorldManager] teleportToDimension: Using custom spawn location for '${world.name}' (no saved location for dimension '$targetWorldName')")
-                world.spawnLocation!!.toBukkitLocation(bukkitWorld)
+                logger.info("[WorldManager] teleportToDimension: Using custom spawn for '${world.name}' (first visit)")
+                val customSpawn = world.spawnLocation!!
+                debugLogger.debug("Using custom spawn location (first visit)",
+                    "x" to customSpawn.x, "y" to customSpawn.y, "z" to customSpawn.z
+                )
+                customSpawn.toBukkitLocation(bukkitWorld)
             }
-            // Fall back to default spawn location
+            // Fall back to world spawn location
             else -> {
-                logger.info("[WorldManager] teleportToDimension: Using default spawn location for '${world.name}' dimension '$targetWorldName'")
-                bukkitWorld.spawnLocation
+                logger.info("[WorldManager] teleportToDimension: Using world spawn for '$targetWorldName' (first visit)")
+                val spawn = bukkitWorld.spawnLocation
+                debugLogger.debug("Using world spawn location (first visit/default)",
+                    "x" to spawn.x, "y" to spawn.y, "z" to spawn.z
+                )
+                spawn
             }
         }
 
-        // Use async teleportation
+        // Check if this is first time in target world
+        val isFirstVisit = !worldStateManager.hasStateForWorld(player.uniqueId, targetWorldName)
+        debugLogger.debug("First visit check for dimension teleport", "isFirstVisit" to isFirstVisit)
+
+        // STEP 3: Teleport async
+        debugLogger.debug("Initiating async dimension teleport",
+            "destination" to targetWorldName,
+            "x" to location.x, "y" to location.y, "z" to location.z
+        )
         player.teleportAsync(location).thenAccept { success ->
             if (success) {
-                logger.info("[WorldManager] teleportToDimension: Successfully teleported player '${player.name}' to '${world.name}' dimension '$targetWorldName'")
-                // Set player gamemode on entity scheduler
+                logger.info("[WorldManager] teleportToDimension: Teleport successful for '${player.name}' to '$targetWorldName'")
+                debugLogger.debug("Async dimension teleport successful",
+                    "playerName" to player.name,
+                    "destination" to targetWorldName
+                )
+
+                // STEP 4: Restore or clear state on entity scheduler (after teleport completes)
+                debugLogger.debug("Scheduling state restoration on entity scheduler after dimension teleport")
                 player.scheduler.run(plugin, { _ ->
-                    logger.info("[WorldManager] teleportToDimension: Setting gamemode ${world.defaultGameMode} for player '${player.name}'")
+                    if (isFirstVisit) {
+                        // First time in this world - clear to fresh state
+                        logger.info("[WorldManager] teleportToDimension: First visit to '$targetWorldName', clearing player state")
+                        debugLogger.debug("First visit to dimension - clearing state", "worldName" to targetWorldName)
+                        worldStateManager.clearPlayerState(player)
+                        // Save the cleared state so future visits restore it (not treated as first visit again)
+                        worldStateManager.savePlayerState(player, targetWorldName)
+                        debugLogger.debug("Saved cleared state for future dimension visits")
+                    } else {
+                        // Returning to this world - restore saved state
+                        logger.info("[WorldManager] teleportToDimension: Restoring state for '${player.name}' in '$targetWorldName'")
+                        debugLogger.debug("Returning to dimension - restoring state", "worldName" to targetWorldName)
+                        worldStateManager.restorePlayerState(player, targetWorldName)
+                    }
+
+                    // Set gamemode from world settings
+                    debugLogger.debug("Setting gamemode from world settings", "gameMode" to world.defaultGameMode)
                     player.gameMode = world.defaultGameMode
+                    debugLogger.debugMethodExit("teleportToDimension", true)
                 }, null)
             } else {
-                logger.warning("[WorldManager] teleportToDimension: Failed to teleport player '${player.name}' to '${world.name}' dimension '$targetWorldName'")
+                logger.warning("[WorldManager] teleportToDimension: Failed to teleport '${player.name}' to '$targetWorldName'")
+                debugLogger.debug("Async dimension teleport failed", "playerName" to player.name)
+                debugLogger.debugMethodExit("teleportToDimension", false)
             }
             future.complete(success)
         }
@@ -720,8 +1074,19 @@ class WorldManager(
      * @return The Bukkit World, or null if not loaded
      */
     fun getBukkitWorld(world: PlayerWorld, environment: World.Environment = World.Environment.NORMAL): World? {
+        debugLogger.debugMethodEntry("getBukkitWorld",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "environment" to environment
+        )
         val worldName = getWorldName(world, environment)
-        return Bukkit.getWorld(worldName)
+        val bukkitWorld = Bukkit.getWorld(worldName)
+        debugLogger.debug("Bukkit world lookup result",
+            "searchName" to worldName,
+            "found" to (bukkitWorld != null)
+        )
+        debugLogger.debugMethodExit("getBukkitWorld", bukkitWorld?.name)
+        return bukkitWorld
     }
 
     /**
@@ -748,9 +1113,20 @@ class WorldManager(
      * @return True if player can create more worlds
      */
     fun canCreateWorld(player: Player): Boolean {
+        debugLogger.debugMethodEntry("canCreateWorld",
+            "playerName" to player.name,
+            "playerUuid" to player.uniqueId
+        )
         val currentCount = getWorldCount(player.uniqueId)
         val limit = dataManager.loadPlayerData(player.uniqueId)?.worldLimit ?: defaultWorldLimit
-        return currentCount < limit
+        val canCreate = currentCount < limit
+        debugLogger.debug("World creation permission check",
+            "currentCount" to currentCount,
+            "limit" to limit,
+            "canCreate" to canCreate
+        )
+        debugLogger.debugMethodExit("canCreateWorld", canCreate)
+        return canCreate
     }
 
     /**
@@ -760,7 +1136,10 @@ class WorldManager(
      * @return Number of worlds owned by player
      */
     fun getWorldCount(playerUuid: UUID): Int {
-        return dataManager.getWorldsByOwner(playerUuid).size
+        debugLogger.debugMethodEntry("getWorldCount", "playerUuid" to playerUuid)
+        val count = dataManager.getWorldsByOwner(playerUuid).size
+        debugLogger.debugMethodExit("getWorldCount", count)
+        return count
     }
 
     /**
@@ -769,11 +1148,21 @@ class WorldManager(
      * @param world The world to apply settings to
      */
     fun applyWorldSettings(world: PlayerWorld) {
+        debugLogger.debugMethodEntry("applyWorldSettings",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "timeLock" to world.timeLock,
+            "weatherLock" to world.weatherLock,
+            "defaultGameMode" to world.defaultGameMode
+        )
         logger.info("[WorldManager] applyWorldSettings: Applying settings to world '${world.name}' (TimeLock: ${world.timeLock}, WeatherLock: ${world.weatherLock})")
         val bukkitWorld = getBukkitWorld(world) ?: run {
             logger.warning("[WorldManager] applyWorldSettings: Could not get Bukkit world for '${world.name}'")
+            debugLogger.debug("Cannot apply settings - Bukkit world not found", "worldName" to world.name)
+            debugLogger.debugMethodExit("applyWorldSettings", "failed - no bukkit world")
             return
         }
+        debugLogger.debug("Found Bukkit world for settings", "bukkitWorldName" to bukkitWorld.name)
 
         // Apply time lock
         when (world.timeLock) {
@@ -813,6 +1202,7 @@ class WorldManager(
             }
         }
         logger.info("[WorldManager] applyWorldSettings: Successfully applied settings to world '${world.name}'")
+        debugLogger.debugMethodExit("applyWorldSettings", "success")
     }
 
     /**
@@ -822,14 +1212,26 @@ class WorldManager(
      * @param location The new spawn location
      */
     fun setSpawnLocation(world: PlayerWorld, location: Location) {
+        debugLogger.debugMethodEntry("setSpawnLocation",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "x" to location.x,
+            "y" to location.y,
+            "z" to location.z,
+            "yaw" to location.yaw,
+            "pitch" to location.pitch
+        )
         logger.info("[WorldManager] setSpawnLocation: Setting spawn location for world '${world.name}' to ${location.x}, ${location.y}, ${location.z}")
         world.spawnLocation = location.toSimpleLocation()
+        debugLogger.debug("Saving world with new spawn location")
         dataManager.saveWorld(world)
 
         // Update Bukkit world spawn
         val bukkitWorld = getBukkitWorld(world)
+        debugLogger.debug("Updating Bukkit world spawn", "bukkitWorldFound" to (bukkitWorld != null))
         bukkitWorld?.spawnLocation = location
         logger.info("[WorldManager] setSpawnLocation: Successfully updated spawn location for '${world.name}'")
+        debugLogger.debugMethodExit("setSpawnLocation", "success")
     }
 
     /**
@@ -839,6 +1241,7 @@ class WorldManager(
      * @return The PlayerWorld, or null if not found
      */
     fun getPlayerWorldFromBukkitWorld(bukkitWorld: World): PlayerWorld? {
+        debugLogger.debugMethodEntry("getPlayerWorldFromBukkitWorld", "bukkitWorldName" to bukkitWorld.name)
         val worldName = bukkitWorld.name
 
         // Try to extract owner name and world name from the Bukkit world name
@@ -846,12 +1249,22 @@ class WorldManager(
         val baseName = worldName
             .removeSuffix(NETHER_SUFFIX)
             .removeSuffix(END_SUFFIX)
+        debugLogger.debug("Extracted base name", "original" to worldName, "baseName" to baseName)
 
         // Find matching world
-        return dataManager.getAllWorlds().firstOrNull { world ->
+        val allWorlds = dataManager.getAllWorlds()
+        debugLogger.debug("Searching for matching PlayerWorld", "totalWorlds" to allWorlds.size)
+        val result = allWorlds.firstOrNull { world ->
             val expectedBaseName = "${world.ownerName}_${world.name}".lowercase().replace(" ", "_")
             baseName == expectedBaseName
         }
+        debugLogger.debug("PlayerWorld lookup result",
+            "found" to (result != null),
+            "resultWorldName" to result?.name,
+            "resultWorldId" to result?.id
+        )
+        debugLogger.debugMethodExit("getPlayerWorldFromBukkitWorld", result?.name)
+        return result
     }
 
     /**
@@ -861,7 +1274,10 @@ class WorldManager(
      * @return True if this is a plugin-managed world
      */
     fun isPluginWorld(world: World): Boolean {
-        return getPlayerWorldFromBukkitWorld(world) != null
+        debugLogger.debugMethodEntry("isPluginWorld", "worldName" to world.name)
+        val isPlugin = getPlayerWorldFromBukkitWorld(world) != null
+        debugLogger.debugMethodExit("isPluginWorld", isPlugin)
+        return isPlugin
     }
 
     /**
@@ -870,9 +1286,17 @@ class WorldManager(
      * @return List of loaded PlayerWorlds
      */
     fun getLoadedWorlds(): List<PlayerWorld> {
-        return dataManager.getAllWorlds().filter { world ->
+        debugLogger.debugMethodEntry("getLoadedWorlds")
+        val allWorlds = dataManager.getAllWorlds()
+        val loadedWorlds = allWorlds.filter { world ->
             getBukkitWorld(world) != null
         }
+        debugLogger.debug("Loaded worlds count",
+            "totalWorlds" to allWorlds.size,
+            "loadedWorlds" to loadedWorlds.size
+        )
+        debugLogger.debugMethodExit("getLoadedWorlds", loadedWorlds.size)
+        return loadedWorlds
     }
 
     // ========================
@@ -886,12 +1310,20 @@ class WorldManager(
      * @return Error message, or null if valid
      */
     private fun validateWorldName(name: String): String? {
-        return when {
+        debugLogger.debugMethodEntry("validateWorldName", "name" to name, "nameLength" to name.length)
+        val result = when {
             name.isBlank() -> "World name cannot be empty"
             name.length > maxNameLength -> "World name is too long (max $maxNameLength characters)"
             !namePattern.matches(name) -> "World name can only contain letters, numbers, and underscores"
             else -> null
         }
+        debugLogger.debug("World name validation result",
+            "name" to name,
+            "isValid" to (result == null),
+            "error" to result
+        )
+        debugLogger.debugMethodExit("validateWorldName", result)
+        return result
     }
 
     /**
@@ -909,6 +1341,12 @@ class WorldManager(
         worldType: WorldType,
         seed: Long?
     ): World? {
+        debugLogger.debugMethodEntry("createDimension",
+            "worldName" to worldName,
+            "environment" to environment,
+            "worldType" to worldType,
+            "seed" to seed
+        )
         logger.info("[WorldManager] createDimension: Creating dimension '$worldName' (Environment: $environment, Type: $worldType, Seed: ${seed ?: "random"})")
 
         try {
@@ -1136,10 +1574,21 @@ class WorldManager(
 
             val craftWorld = serverLevel.world as CraftWorld
             logger.info("[WorldManager] createDimension: Successfully created dimension '$worldName' using NMS")
+            debugLogger.debug("Dimension created successfully via NMS",
+                "worldName" to worldName,
+                "bukkitWorldName" to craftWorld.name
+            )
+            debugLogger.debugMethodExit("createDimension", craftWorld.name)
             return craftWorld
 
         } catch (e: Exception) {
             logger.severe("[WorldManager] createDimension: Failed to create dimension $worldName: ${e.message}")
+            debugLogger.debug("Dimension creation failed",
+                "worldName" to worldName,
+                "exceptionType" to e.javaClass.simpleName,
+                "exceptionMessage" to e.message
+            )
+            debugLogger.debugMethodExit("createDimension", null)
             e.printStackTrace()
             return null
         }
@@ -1161,17 +1610,33 @@ class WorldManager(
         worldType: WorldType,
         seed: Long?
     ): World? {
+        debugLogger.debugMethodEntry("createOrLoadDimension",
+            "worldName" to worldName,
+            "environment" to environment,
+            "worldType" to worldType,
+            "seed" to seed
+        )
         // Check if world folder exists
         val worldFolder = File(plugin.server.worldContainer, worldName)
+        val folderExists = worldFolder.exists()
+        debugLogger.debug("World folder check",
+            "folderPath" to worldFolder.absolutePath,
+            "exists" to folderExists
+        )
 
-        if (worldFolder.exists()) {
+        if (folderExists) {
             logger.info("[WorldManager] createOrLoadDimension: Loading existing world '$worldName'")
+            debugLogger.debug("Loading existing world folder")
         } else {
             logger.info("[WorldManager] createOrLoadDimension: Creating new world '$worldName'")
+            debugLogger.debug("Creating new world (folder does not exist)")
         }
 
         // Use the unified NMS approach for both loading and creating
-        return createDimension(worldName, environment, worldType, seed)
+        debugLogger.debug("Delegating to createDimension")
+        val result = createDimension(worldName, environment, worldType, seed)
+        debugLogger.debugMethodExit("createOrLoadDimension", result?.name)
+        return result
     }
 
     /**
@@ -1222,8 +1687,17 @@ class WorldManager(
      * @param world The world to mark for cleanup
      */
     private fun markWorldForCleanup(world: PlayerWorld) {
+        debugLogger.debugMethodEntry("markWorldForCleanup",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "ownerName" to world.ownerName
+        )
         worldsToCleanup.add(world)
+        debugLogger.debug("World added to cleanup list",
+            "cleanupListSize" to worldsToCleanup.size
+        )
         logger.warning("[WorldManager] markWorldForCleanup: World '${world.name}' (owner: ${world.ownerName}) marked for cleanup - folder missing")
+        debugLogger.debugMethodExit("markWorldForCleanup")
     }
 
     /**
@@ -1231,12 +1705,18 @@ class WorldManager(
      * This should be called after all worlds have been loaded during initialization.
      */
     private fun processCleanupList() {
+        debugLogger.debugMethodEntry("processCleanupList", "cleanupListSize" to worldsToCleanup.size)
         if (worldsToCleanup.isEmpty()) {
             logger.info("[WorldManager] processCleanupList: No orphaned worlds to clean up")
+            debugLogger.debug("Cleanup list is empty, nothing to process")
+            debugLogger.debugMethodExit("processCleanupList")
             return
         }
 
         logger.info("[WorldManager] processCleanupList: Processing ${worldsToCleanup.size} orphaned world(s)")
+        debugLogger.debug("Processing orphaned worlds",
+            "worldNames" to worldsToCleanup.map { it.name }
+        )
 
         worldsToCleanup.forEach { world ->
             try {
@@ -1257,8 +1737,11 @@ class WorldManager(
             }
         }
 
-        logger.info("[WorldManager] processCleanupList: Cleanup complete - removed ${worldsToCleanup.size} orphaned world(s)")
+        val cleanedCount = worldsToCleanup.size
+        logger.info("[WorldManager] processCleanupList: Cleanup complete - removed $cleanedCount orphaned world(s)")
+        debugLogger.debug("Cleanup complete", "cleanedCount" to cleanedCount)
         worldsToCleanup.clear()
+        debugLogger.debugMethodExit("processCleanupList")
     }
 
     /**
@@ -1266,10 +1749,16 @@ class WorldManager(
      * This should be called during plugin initialization before worlds are loaded.
      */
     fun processPendingDeletions() {
+        debugLogger.debugMethodEntry("processPendingDeletions",
+            "pendingDeletionsFile" to pendingDeletionsFile.absolutePath
+        )
         if (!pendingDeletionsFile.exists()) {
             logger.info("[WorldManager] processPendingDeletions: No pending deletions file found")
+            debugLogger.debug("Pending deletions file does not exist")
+            debugLogger.debugMethodExit("processPendingDeletions")
             return
         }
+        debugLogger.debug("Pending deletions file exists")
 
         try {
             val worldNames = pendingDeletionsFile.readLines().filter { it.isNotBlank() }
@@ -1301,10 +1790,21 @@ class WorldManager(
 
             // Clear the pending deletions file
             pendingDeletionsFile.delete()
+            debugLogger.debug("Cleared pending deletions file")
             logger.info("[WorldManager] processPendingDeletions: Completed - deleted $deletedCount of ${worldNames.size} world folders")
+            debugLogger.debug("Pending deletions processing complete",
+                "deletedCount" to deletedCount,
+                "totalPending" to worldNames.size
+            )
+            debugLogger.debugMethodExit("processPendingDeletions")
 
         } catch (e: Exception) {
             logger.severe("[WorldManager] processPendingDeletions: Error processing pending deletions: ${e.message}")
+            debugLogger.debug("Error processing pending deletions",
+                "exceptionType" to e.javaClass.simpleName,
+                "exceptionMessage" to e.message
+            )
+            debugLogger.debugMethodExit("processPendingDeletions", "error: ${e.message}")
             e.printStackTrace()
         }
     }

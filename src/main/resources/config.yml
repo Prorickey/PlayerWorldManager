@@ -1,10 +1,15 @@
 # PlayerWorldManager Configuration
 
+# Enable debug mode for verbose logging
+# When enabled, extensive debug messages will be logged showing variable values,
+# method calls, and internal state for troubleshooting purposes
+debug: false
+
 # The name of the default world where all players spawn
 default-world: "world"
 
 # Maximum number of worlds a player can create
-max-worlds-per-player: 1
+max-worlds-per-player: 2
 
 # Chat settings
 chat:

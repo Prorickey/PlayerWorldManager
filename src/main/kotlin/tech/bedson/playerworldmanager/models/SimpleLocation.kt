@@ -13,7 +13,21 @@ data class SimpleLocation(
     val z: Double,
     val yaw: Float = 0f,
     val pitch: Float = 0f
-)
+) {
+    /**
+     * Returns a debug-friendly string representation.
+     */
+    fun toDebugString(): String {
+        return "SimpleLocation(x=%.2f, y=%.2f, z=%.2f, yaw=%.1f, pitch=%.1f)".format(x, y, z, yaw, pitch)
+    }
+
+    /**
+     * Returns a compact coordinate string for logging.
+     */
+    fun toCompactString(): String {
+        return "(%.1f, %.1f, %.1f)".format(x, y, z)
+    }
+}
 
 /**
  * Convert SimpleLocation to Bukkit Location.

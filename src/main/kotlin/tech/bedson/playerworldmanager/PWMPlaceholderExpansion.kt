@@ -7,6 +7,7 @@ import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
+import tech.bedson.playerworldmanager.utils.DebugLogger
 
 class PWMPlaceholderExpansion(
     private val plugin: JavaPlugin,
@@ -15,25 +16,41 @@ class PWMPlaceholderExpansion(
     private val dataManager: DataManager
 ) : PlaceholderExpansion() {
 
+    private val debugLogger = DebugLogger(plugin, "PWMPlaceholderExpansion")
+
+    init {
+        debugLogger.debug("PWMPlaceholderExpansion initialized",
+            "identifier" to "pwm",
+            "version" to plugin.pluginMeta.version
+        )
+    }
+
     override fun getIdentifier(): String = "pwm"
     override fun getAuthor(): String = "prorickey"
     override fun getVersion(): String = plugin.pluginMeta.version
     override fun persist(): Boolean = true
 
     override fun onRequest(player: OfflinePlayer?, params: String): String? {
+        debugLogger.debugMethodEntry("onRequest", "player" to player?.name, "params" to params)
+
         // Handle placeholders that don't require a player
         when (params) {
             "total_worlds" -> {
-                return dataManager.getAllWorlds().size.toString()
+                val result = dataManager.getAllWorlds().size.toString()
+                debugLogger.debugMethodExit("onRequest", result)
+                return result
             }
             "total_players" -> {
-                return dataManager.getAllPlayerData().size.toString()
+                val result = dataManager.getAllPlayerData().size.toString()
+                debugLogger.debugMethodExit("onRequest", result)
+                return result
             }
         }
 
         // For player-specific placeholders, check if player is online
         if (player == null || !player.isOnline) {
-            return when {
+            debugLogger.debug("Player is null or offline, handling limited placeholders")
+            val result = when {
                 params.startsWith("world_") && params.endsWith("_players") -> {
                     // Handle %pwm_world_<name>_players% for offline/null players
                     val worldName = params.removePrefix("world_").removeSuffix("_players")
@@ -64,13 +81,22 @@ class PWMPlaceholderExpansion(
                 }
                 else -> "N/A"
             }
+            debugLogger.debugMethodExit("onRequest", result)
+            return result
         }
 
-        val onlinePlayer = player.player ?: return "N/A"
+        val onlinePlayer = player.player ?: run {
+            debugLogger.debugMethodExit("onRequest", "N/A (player.player is null)")
+            return "N/A"
+        }
         val currentWorld = onlinePlayer.world
         val playerWorld = worldManager.getPlayerWorldFromBukkitWorld(currentWorld)
+        debugLogger.debug("Processing placeholder for online player",
+            "world" to currentWorld.name,
+            "isPlayerWorld" to (playerWorld != null)
+        )
 
-        return when (params) {
+        val result = when (params) {
             // Current world info
             "world" -> {
                 playerWorld?.let { "${it.ownerName}_${it.name}".lowercase() } ?: "N/A"
@@ -177,27 +203,36 @@ class PWMPlaceholderExpansion(
                 }
             }
         }
+
+        debugLogger.debugMethodExit("onRequest", result)
+        return result
     }
 
     /**
      * Find a PlayerWorld by its full Bukkit world name (e.g., "prorickey_myworld").
      */
     private fun findWorldByFullName(fullName: String): PlayerWorld? {
+        debugLogger.debugMethodEntry("findWorldByFullName", "fullName" to fullName)
         val allWorlds = dataManager.getAllWorlds()
-        return allWorlds.firstOrNull { world ->
+        val result = allWorlds.firstOrNull { world ->
             val expectedName = "${world.ownerName}_${world.name}".lowercase().replace(" ", "_")
             expectedName == fullName.lowercase()
         }
+        debugLogger.debugMethodExit("findWorldByFullName", result?.name ?: "null")
+        return result
     }
 
     /**
      * Find a PlayerWorld by owner name and world name.
      */
     private fun findWorldByOwnerAndName(ownerName: String, worldName: String): PlayerWorld? {
+        debugLogger.debugMethodEntry("findWorldByOwnerAndName", "ownerName" to ownerName, "worldName" to worldName)
         val allWorlds = dataManager.getAllWorlds()
-        return allWorlds.firstOrNull { world ->
+        val result = allWorlds.firstOrNull { world ->
             world.ownerName.equals(ownerName, ignoreCase = true) &&
             world.name.equals(worldName, ignoreCase = true)
         }
+        debugLogger.debugMethodExit("findWorldByOwnerAndName", result?.name ?: "null")
+        return result
     }
 }

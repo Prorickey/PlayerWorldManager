@@ -14,6 +14,7 @@ import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
+import tech.bedson.playerworldmanager.utils.DebugLogger
 
 /**
  * Main menu GUI for player worlds.
@@ -25,8 +26,10 @@ class MainMenuGui(
     private val inviteManager: InviteManager,
     private val dataManager: DataManager
 ) {
+    private val debugLogger = DebugLogger(plugin, "MainMenuGui")
 
     fun open(player: Player) {
+        debugLogger.debugMethodEntry("open", "player" to player.name, "playerUuid" to player.uniqueId)
         plugin.logger.info("[GUI] MainMenuGui: Opening for player ${player.name}")
         val ownedWorlds = dataManager.getWorldsByOwner(player.uniqueId)
         val pendingInvites = inviteManager.getPendingInvites(player.uniqueId)
@@ -34,17 +37,27 @@ class MainMenuGui(
             .filter { inviteManager.isInvited(player.uniqueId, it) }
 
         plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} has ${ownedWorlds.size} owned worlds, ${pendingInvites.size} pending invites, ${invitedWorlds.size} invited worlds")
+        debugLogger.debug("Loaded player data",
+            "ownedWorldCount" to ownedWorlds.size,
+            "pendingInviteCount" to pendingInvites.size,
+            "invitedWorldCount" to invitedWorlds.size,
+            "playerUuid" to player.uniqueId
+        )
 
         // Use paginated GUI if many worlds
         val gui = if (ownedWorlds.size > 18) {
             plugin.logger.info("[GUI] MainMenuGui: Using paginated GUI for player ${player.name}")
+            debugLogger.debug("Creating paginated GUI (worlds > 18)", "worldCount" to ownedWorlds.size)
             createPaginatedGui(player, ownedWorlds, pendingInvites.size, invitedWorlds.size)
         } else {
             plugin.logger.info("[GUI] MainMenuGui: Using simple GUI for player ${player.name}")
+            debugLogger.debug("Creating simple GUI (worlds <= 18)", "worldCount" to ownedWorlds.size)
             createSimpleGui(player, ownedWorlds, pendingInvites.size, invitedWorlds.size)
         }
 
+        debugLogger.debug("Opening GUI for player", "guiType" to gui.javaClass.simpleName)
         gui.open(player)
+        debugLogger.debugMethodExit("open")
     }
 
     private fun createSimpleGui(
@@ -53,6 +66,12 @@ class MainMenuGui(
         pendingInviteCount: Int,
         invitedWorldsCount: Int
     ): Gui {
+        debugLogger.debugMethodEntry("createSimpleGui",
+            "player" to player.name,
+            "ownedWorldCount" to ownedWorlds.size,
+            "pendingInviteCount" to pendingInviteCount,
+            "invitedWorldsCount" to invitedWorldsCount
+        )
         val gui = Gui.gui()
             .title(Component.text("World Manager", NamedTextColor.GOLD))
             .rows(3)
@@ -60,14 +79,18 @@ class MainMenuGui(
             .create()
 
         // Add player's owned worlds
+        debugLogger.debug("Adding owned worlds to GUI", "count" to minOf(ownedWorlds.size, 18))
         ownedWorlds.forEachIndexed { index, world ->
             if (index < 18) {
+                debugLogger.debug("Adding world item", "slot" to index, "worldName" to world.name, "worldId" to world.id)
                 gui.setItem(index, createWorldItem(player, world))
             }
         }
 
         // Create New World button (if under limit)
-        if (worldManager.canCreateWorld(player)) {
+        val canCreate = worldManager.canCreateWorld(player)
+        debugLogger.debug("Checking create world permission", "canCreate" to canCreate)
+        if (canCreate) {
             gui.setItem(20, createNewWorldItem(player))
         }
 
@@ -80,6 +103,7 @@ class MainMenuGui(
         // Return to Spawn button
         gui.setItem(13, createReturnToSpawnItem(player))
 
+        debugLogger.debugMethodExit("createSimpleGui", "gui created with 3 rows")
         return gui
     }
 
@@ -89,6 +113,12 @@ class MainMenuGui(
         pendingInviteCount: Int,
         invitedWorldsCount: Int
     ): PaginatedGui {
+        debugLogger.debugMethodEntry("createPaginatedGui",
+            "player" to player.name,
+            "ownedWorldCount" to ownedWorlds.size,
+            "pendingInviteCount" to pendingInviteCount,
+            "invitedWorldsCount" to invitedWorldsCount
+        )
         val gui = Gui.paginated()
             .title(Component.text("World Manager", NamedTextColor.GOLD))
             .rows(6)
@@ -96,16 +126,20 @@ class MainMenuGui(
             .create()
 
         // Add all owned worlds
+        debugLogger.debug("Adding all owned worlds to paginated GUI", "count" to ownedWorlds.size)
         ownedWorlds.forEach { world ->
+            debugLogger.debug("Adding world item to paginated GUI", "worldName" to world.name, "worldId" to world.id)
             gui.addItem(createWorldItem(player, world))
         }
 
         // Navigation buttons
+        debugLogger.debug("Adding navigation buttons to paginated GUI")
         gui.setItem(6, 3, ItemBuilder.from(Material.ARROW)
             .name(Component.text("Previous Page", NamedTextColor.YELLOW))
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} navigated to previous page")
+                debugLogger.debug("Previous page clicked", "player" to player.name, "currentPage" to gui.currentPageNum)
                 gui.previous()
             })
 
@@ -114,11 +148,14 @@ class MainMenuGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} navigated to next page")
+                debugLogger.debug("Next page clicked", "player" to player.name, "currentPage" to gui.currentPageNum)
                 gui.next()
             })
 
         // Create New World button
-        if (worldManager.canCreateWorld(player)) {
+        val canCreatePaginated = worldManager.canCreateWorld(player)
+        debugLogger.debug("Checking create world permission for paginated GUI", "canCreate" to canCreatePaginated)
+        if (canCreatePaginated) {
             gui.setItem(6, 1, createNewWorldItem(player))
         }
 
@@ -131,15 +168,24 @@ class MainMenuGui(
         // Return to Spawn button
         gui.setItem(6, 5, createReturnToSpawnItem(player))
 
+        debugLogger.debugMethodExit("createPaginatedGui", "gui created with 6 rows")
         return gui
     }
 
     private fun createWorldItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createWorldItem", "player" to player.name, "worldName" to world.name, "worldId" to world.id)
         val bukkitWorld = worldManager.getBukkitWorld(world)
         val playersOnline = bukkitWorld?.players?.size ?: 0
         val invitedCount = world.invitedPlayers.size
+        debugLogger.debugState("WorldItem",
+            "worldName" to world.name,
+            "worldType" to world.worldType,
+            "playersOnline" to playersOnline,
+            "invitedCount" to invitedCount,
+            "worldLoaded" to (bukkitWorld != null)
+        )
 
-        return ItemBuilder.from(Material.GRASS_BLOCK)
+        val item = ItemBuilder.from(Material.GRASS_BLOCK)
             .name(Component.text(world.name, NamedTextColor.GOLD))
             .lore(
                 listOf(
@@ -153,20 +199,30 @@ class MainMenuGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} clicked on world ${world.name}")
+                debugLogger.debug("World item clicked", "player" to player.name, "worldName" to world.name, "worldId" to world.id)
                 player.closeInventory()
                 // Open world management GUI on player's scheduler
                 player.scheduler.run(plugin, { _ ->
+                    debugLogger.debug("Opening WorldManageGui", "player" to player.name, "worldName" to world.name)
                     WorldManageGui(plugin, worldManager, inviteManager, dataManager).open(player, world)
                 }, null)
             }
+        debugLogger.debugMethodExit("createWorldItem", "GuiItem for ${world.name}")
+        return item
     }
 
     private fun createNewWorldItem(player: Player): GuiItem {
+        debugLogger.debugMethodEntry("createNewWorldItem", "player" to player.name)
         val playerData = dataManager.loadPlayerData(player.uniqueId)
         val currentCount = worldManager.getWorldCount(player.uniqueId)
         val limit = playerData?.worldLimit ?: 3
+        debugLogger.debugState("NewWorldItem",
+            "currentCount" to currentCount,
+            "limit" to limit,
+            "hasPlayerData" to (playerData != null)
+        )
 
-        return ItemBuilder.from(Material.EMERALD_BLOCK)
+        val item = ItemBuilder.from(Material.EMERALD_BLOCK)
             .name(Component.text("Create New World", NamedTextColor.GREEN))
             .lore(
                 listOf(
@@ -178,6 +234,7 @@ class MainMenuGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} clicked Create New World button")
+                debugLogger.debug("Create New World button clicked", "player" to player.name)
                 player.closeInventory()
                 player.sendMessage(
                     Component.text("Use ", NamedTextColor.YELLOW)
@@ -185,10 +242,13 @@ class MainMenuGui(
                         .append(Component.text(" to create a world", NamedTextColor.YELLOW))
                 )
             }
+        debugLogger.debugMethodExit("createNewWorldItem")
+        return item
     }
 
     private fun createInvitedWorldsItem(player: Player, count: Int): GuiItem {
-        return ItemBuilder.from(Material.ENDER_PEARL)
+        debugLogger.debugMethodEntry("createInvitedWorldsItem", "player" to player.name, "count" to count)
+        val item = ItemBuilder.from(Material.ENDER_PEARL)
             .name(Component.text("Invited Worlds", NamedTextColor.AQUA))
             .lore(
                 listOf(
@@ -200,19 +260,25 @@ class MainMenuGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} clicked Invited Worlds button (count: $count)")
+                debugLogger.debug("Invited Worlds button clicked", "player" to player.name, "invitedCount" to count)
                 player.closeInventory()
                 // Open invited worlds GUI on player's scheduler
                 player.scheduler.run(plugin, { _ ->
+                    debugLogger.debug("Opening InvitedWorldsGui", "player" to player.name)
                     InvitedWorldsGui(plugin, worldManager, inviteManager, dataManager).open(player)
                 }, null)
             }
+        debugLogger.debugMethodExit("createInvitedWorldsItem")
+        return item
     }
 
     private fun createPendingInvitesItem(player: Player, count: Int): GuiItem {
+        debugLogger.debugMethodEntry("createPendingInvitesItem", "player" to player.name, "count" to count)
         val material = if (count > 0) Material.PAPER else Material.PAPER
         val color = if (count > 0) NamedTextColor.GREEN else NamedTextColor.GRAY
+        debugLogger.debugState("PendingInvitesItem", "count" to count, "hasInvites" to (count > 0))
 
-        return ItemBuilder.from(material)
+        val item = ItemBuilder.from(material)
             .name(Component.text("Pending Invites", color))
             .lore(
                 listOf(
@@ -225,16 +291,21 @@ class MainMenuGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} clicked Pending Invites button (count: $count)")
+                debugLogger.debug("Pending Invites button clicked", "player" to player.name, "pendingCount" to count)
                 player.closeInventory()
                 // Open invites GUI on player's scheduler
                 player.scheduler.run(plugin, { _ ->
+                    debugLogger.debug("Opening InvitesGui", "player" to player.name)
                     InvitesGui(plugin, inviteManager).open(player)
                 }, null)
             }
+        debugLogger.debugMethodExit("createPendingInvitesItem")
+        return item
     }
 
     private fun createReturnToSpawnItem(player: Player): GuiItem {
-        return ItemBuilder.from(Material.COMPASS)
+        debugLogger.debugMethodEntry("createReturnToSpawnItem", "player" to player.name)
+        val item = ItemBuilder.from(Material.COMPASS)
             .name(Component.text("Return to Spawn", NamedTextColor.AQUA))
             .lore(
                 listOf(
@@ -246,30 +317,30 @@ class MainMenuGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} clicked Return to Spawn button")
+                debugLogger.debug("Return to Spawn button clicked", "player" to player.name, "currentWorld" to player.world.name)
                 player.closeInventory()
 
-                val defaultWorld = Bukkit.getWorlds().firstOrNull()
-                if (defaultWorld == null) {
-                    plugin.logger.warning("[GUI] MainMenuGui: No default world found for ${player.name}")
-                    player.sendMessage(Component.text("Default world not found", NamedTextColor.RED))
-                    return@asGuiItem
-                }
-
                 player.sendMessage(Component.text("Teleporting to spawn...", NamedTextColor.YELLOW))
+                debugLogger.debug("Initiating teleport to vanilla world", "player" to player.name)
 
-                player.teleportAsync(defaultWorld.spawnLocation).thenAccept { success ->
+                // Use WorldManager to properly save/restore state
+                worldManager.teleportToVanillaWorld(player).thenAccept { success ->
                     player.scheduler.run(plugin, { _ ->
                         if (success) {
                             plugin.logger.info("[GUI] MainMenuGui: Player ${player.name} teleported successfully to spawn")
+                            debugLogger.debug("Teleport to spawn successful", "player" to player.name)
                             player.sendMessage(
                                 Component.text("Teleported to spawn", NamedTextColor.GREEN)
                             )
                         } else {
                             plugin.logger.warning("[GUI] MainMenuGui: Failed to teleport ${player.name} to spawn")
+                            debugLogger.debug("Teleport to spawn failed", "player" to player.name)
                             player.sendMessage(Component.text("Failed to teleport to spawn", NamedTextColor.RED))
                         }
                     }, null)
                 }
             }
+        debugLogger.debugMethodExit("createReturnToSpawnItem")
+        return item
     }
 }

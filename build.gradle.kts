@@ -2,6 +2,8 @@ import io.papermc.paperweight.tasks.RemapJar
 import io.papermc.paperweight.userdev.ReobfArtifactConfiguration
 import net.minecrell.pluginyml.bukkit.BukkitPluginDescription
 import net.minecrell.pluginyml.paper.PaperPluginDescription
+import java.util.UUID
+import java.time.Instant
 
 plugins {
     kotlin("jvm") version "1.9.22"
@@ -35,9 +37,34 @@ kotlin {
 paperweight.reobfArtifactConfiguration =
     ReobfArtifactConfiguration.MOJANG_PRODUCTION
 
+// Generate a unique build ID for each build
+val buildId: String by lazy { UUID.randomUUID().toString().substring(0, 8) }
+val buildTime: String by lazy { Instant.now().toString() }
+
+// Create build-info.properties in src/main/resources before processResources
+val generateBuildInfo = tasks.register("generateBuildInfo") {
+    val outputFile = file("src/main/resources/build-info.properties")
+    outputs.file(outputFile)
+    outputs.upToDateWhen { false }  // Always regenerate
+    doLast {
+        val newBuildId = UUID.randomUUID().toString().substring(0, 8)
+        val newBuildTime = Instant.now().toString()
+        outputFile.writeText("""
+            build.id=$newBuildId
+            build.time=$newBuildTime
+            build.version=${project.version}
+        """.trimIndent())
+        println("Generated build ID: $newBuildId")
+    }
+}
+
 tasks {
     jar {
         enabled = false
+    }
+
+    processResources {
+        dependsOn(generateBuildInfo)
     }
 
     shadowJar {
@@ -114,6 +141,7 @@ fun configureServer() {
         enable-rcon=true
         rcon.port=25575
         rcon.password=test
+        debug=true
     """.trimIndent())
 
     val bukkitYml = foliaDir.file("bukkit.yml").asFile

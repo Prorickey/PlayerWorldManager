@@ -17,6 +17,7 @@ import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
 import tech.bedson.playerworldmanager.models.TimeLock
 import tech.bedson.playerworldmanager.models.WeatherLock
+import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -30,6 +31,7 @@ class WorldManageGui(
     private val inviteManager: InviteManager,
     private val dataManager: DataManager
 ) {
+    private val debugLogger = DebugLogger(plugin, "WorldManageGui")
 
     companion object {
         private val pendingDeletes = ConcurrentHashMap<UUID, PendingDelete>()
@@ -41,7 +43,16 @@ class WorldManageGui(
     }
 
     fun open(player: Player, world: PlayerWorld) {
+        debugLogger.debugMethodEntry("open", "player" to player.name, "worldName" to world.name, "worldId" to world.id)
         plugin.logger.info("[GUI] WorldManageGui: Opening for player ${player.name}, world ${world.name}")
+        debugLogger.debugState("WorldManageGui",
+            "worldName" to world.name,
+            "ownerUuid" to world.ownerUuid,
+            "timeLock" to world.timeLock,
+            "weatherLock" to world.weatherLock,
+            "defaultGameMode" to world.defaultGameMode,
+            "invitedPlayers" to world.invitedPlayers.size
+        )
 
         val gui = Gui.gui()
             .title(Component.text("Manage: ${world.name}", NamedTextColor.GOLD))
@@ -50,29 +61,35 @@ class WorldManageGui(
             .create()
 
         // Row 1: Teleportation
+        debugLogger.debug("Setting up Row 1: Teleportation")
         gui.setItem(0, createTeleportItem(player, world, World.Environment.NORMAL))
         gui.setItem(1, createTeleportItem(player, world, World.Environment.NETHER))
         gui.setItem(2, createTeleportItem(player, world, World.Environment.THE_END))
         gui.setItem(4, createInvitedPlayersItem(world))
 
         // Row 2: Settings
+        debugLogger.debug("Setting up Row 2: Settings")
         gui.setItem(9, createTimeLockItem(player, world))
         gui.setItem(10, createWeatherLockItem(player, world))
         gui.setItem(11, createGameModeItem(player, world))
         gui.setItem(12, createSetSpawnItem(player, world))
 
         // Row 3: Invite/Kick
+        debugLogger.debug("Setting up Row 3: Invite/Kick")
         gui.setItem(18, createInvitePlayerItem(player, world))
         gui.setItem(19, createKickPlayerItem(player, world))
 
         // Row 4: Ownership
+        debugLogger.debug("Setting up Row 4: Ownership")
         gui.setItem(27, createTransferOwnershipItem(player, world))
 
         // Row 5: Navigation and deletion
+        debugLogger.debug("Setting up Row 5: Navigation and deletion")
         gui.setItem(36, createBackItem(player))
         gui.setItem(44, createDeleteItem(player, world))
 
         // Fill empty slots with gray glass panes
+        debugLogger.debug("Filling empty slots with glass panes")
         for (i in 0 until 45) {
             if (gui.getGuiItem(i) == null) {
                 gui.setItem(i, ItemBuilder.from(Material.GRAY_STAINED_GLASS_PANE)
@@ -81,34 +98,42 @@ class WorldManageGui(
             }
         }
 
+        debugLogger.debug("Opening GUI for player", "player" to player.name)
         gui.open(player)
+        debugLogger.debugMethodExit("open")
     }
 
     private fun createTeleportItem(player: Player, world: PlayerWorld, environment: World.Environment): GuiItem {
+        debugLogger.debugMethodEntry("createTeleportItem", "player" to player.name, "worldName" to world.name, "environment" to environment)
         val (material, name) = when (environment) {
             World.Environment.NORMAL -> Material.COMPASS to "Teleport to Overworld"
             World.Environment.NETHER -> Material.NETHERRACK to "Teleport to Nether"
             World.Environment.THE_END -> Material.END_STONE to "Teleport to End"
             else -> Material.COMPASS to "Teleport"
         }
+        debugLogger.debug("Creating teleport item", "material" to material, "name" to name)
 
-        return ItemBuilder.from(material)
+        val item = ItemBuilder.from(material)
             .name(Component.text(name, NamedTextColor.GREEN))
             .lore(listOf(Component.text("Click to teleport", NamedTextColor.YELLOW)))
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} clicked teleport to ${environment.name} in world ${world.name}")
+                debugLogger.debug("Teleport button clicked", "player" to player.name, "environment" to environment, "worldName" to world.name)
                 player.closeInventory()
                 player.scheduler.run(plugin, { _ ->
+                    debugLogger.debug("Initiating teleport to dimension", "player" to player.name, "environment" to environment)
                     worldManager.teleportToDimension(player, world, environment).thenAccept { success ->
                         if (success) {
                             plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} successfully teleported to ${environment.name} in world ${world.name}")
+                            debugLogger.debug("Teleport successful", "player" to player.name, "environment" to environment)
                             player.sendMessage(
                                 Component.text("Teleported to ", NamedTextColor.GREEN)
                                     .append(Component.text(world.name, NamedTextColor.GOLD))
                             )
                         } else {
                             plugin.logger.warning("[GUI] WorldManageGui: Player ${player.name} failed to teleport to ${environment.name} in world ${world.name}")
+                            debugLogger.debug("Teleport failed", "player" to player.name, "environment" to environment)
                             player.sendMessage(
                                 Component.text("Failed to teleport to world", NamedTextColor.RED)
                             )
@@ -116,13 +141,17 @@ class WorldManageGui(
                     }
                 }, null)
             }
+        debugLogger.debugMethodExit("createTeleportItem")
+        return item
     }
 
     private fun createInvitedPlayersItem(world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createInvitedPlayersItem", "worldName" to world.name)
         val invitedCount = world.invitedPlayers.size
         val invitedNames = world.invitedPlayers.take(5).map { uuid ->
             Bukkit.getOfflinePlayer(uuid).name ?: uuid.toString()
         }
+        debugLogger.debugState("InvitedPlayersItem", "invitedCount" to invitedCount, "displayedNames" to invitedNames.size)
 
         val lore = buildList<Component> {
             add(Component.text("Invited Players: $invitedCount", NamedTextColor.GRAY))
@@ -137,23 +166,28 @@ class WorldManageGui(
             }
         }
 
-        return ItemBuilder.from(Material.PLAYER_HEAD)
+        val item = ItemBuilder.from(Material.PLAYER_HEAD)
             .name(Component.text("Invited Players", NamedTextColor.AQUA))
             .lore(lore)
             .asGuiItem { event ->
                 event.isCancelled = true
+                debugLogger.debug("Invited Players item clicked (display only)", "worldName" to world.name)
             }
+        debugLogger.debugMethodExit("createInvitedPlayersItem", "invitedCount=$invitedCount")
+        return item
     }
 
     private fun createTimeLockItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createTimeLockItem", "player" to player.name, "worldName" to world.name)
         val currentLock = world.timeLock
         val nextLock = when (currentLock) {
             TimeLock.CYCLE -> TimeLock.DAY
             TimeLock.DAY -> TimeLock.NIGHT
             TimeLock.NIGHT -> TimeLock.CYCLE
         }
+        debugLogger.debugState("TimeLockItem", "currentLock" to currentLock, "nextLock" to nextLock)
 
-        return ItemBuilder.from(Material.CLOCK)
+        val item = ItemBuilder.from(Material.CLOCK)
             .name(Component.text("Time Setting", NamedTextColor.YELLOW))
             .lore(
                 listOf(
@@ -165,8 +199,10 @@ class WorldManageGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} changing time lock from $currentLock to $nextLock in world ${world.name}")
+                debugLogger.debug("Time lock button clicked", "player" to player.name, "currentLock" to currentLock, "nextLock" to nextLock)
                 world.timeLock = nextLock
                 dataManager.saveWorld(world)
+                debugLogger.debug("Time lock saved, applying world settings", "worldName" to world.name)
                 Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
                     worldManager.applyWorldSettings(world)
                 }
@@ -176,17 +212,21 @@ class WorldManageGui(
                 )
                 open(player, world) // Refresh GUI
             }
+        debugLogger.debugMethodExit("createTimeLockItem")
+        return item
     }
 
     private fun createWeatherLockItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createWeatherLockItem", "player" to player.name, "worldName" to world.name)
         val currentLock = world.weatherLock
         val nextLock = when (currentLock) {
             WeatherLock.CYCLE -> WeatherLock.CLEAR
             WeatherLock.CLEAR -> WeatherLock.RAIN
             WeatherLock.RAIN -> WeatherLock.CYCLE
         }
+        debugLogger.debugState("WeatherLockItem", "currentLock" to currentLock, "nextLock" to nextLock)
 
-        return ItemBuilder.from(Material.WATER_BUCKET)
+        val item = ItemBuilder.from(Material.WATER_BUCKET)
             .name(Component.text("Weather Setting", NamedTextColor.AQUA))
             .lore(
                 listOf(
@@ -198,8 +238,10 @@ class WorldManageGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} changing weather lock from $currentLock to $nextLock in world ${world.name}")
+                debugLogger.debug("Weather lock button clicked", "player" to player.name, "currentLock" to currentLock, "nextLock" to nextLock)
                 world.weatherLock = nextLock
                 dataManager.saveWorld(world)
+                debugLogger.debug("Weather lock saved, applying world settings", "worldName" to world.name)
                 Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
                     worldManager.applyWorldSettings(world)
                 }
@@ -209,9 +251,12 @@ class WorldManageGui(
                 )
                 open(player, world) // Refresh GUI
             }
+        debugLogger.debugMethodExit("createWeatherLockItem")
+        return item
     }
 
     private fun createGameModeItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createGameModeItem", "player" to player.name, "worldName" to world.name)
         val currentMode = world.defaultGameMode
         val nextMode = when (currentMode) {
             GameMode.SURVIVAL -> GameMode.CREATIVE
@@ -219,8 +264,9 @@ class WorldManageGui(
             GameMode.ADVENTURE -> GameMode.SPECTATOR
             GameMode.SPECTATOR -> GameMode.SURVIVAL
         }
+        debugLogger.debugState("GameModeItem", "currentMode" to currentMode, "nextMode" to nextMode)
 
-        return ItemBuilder.from(Material.DIAMOND_SWORD)
+        val item = ItemBuilder.from(Material.DIAMOND_SWORD)
             .name(Component.text("Default Gamemode", NamedTextColor.GOLD))
             .lore(
                 listOf(
@@ -232,18 +278,23 @@ class WorldManageGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} changing default gamemode from $currentMode to $nextMode in world ${world.name}")
+                debugLogger.debug("GameMode button clicked", "player" to player.name, "currentMode" to currentMode, "nextMode" to nextMode)
                 world.defaultGameMode = nextMode
                 dataManager.saveWorld(world)
+                debugLogger.debug("GameMode saved", "worldName" to world.name, "newGameMode" to nextMode)
                 player.sendMessage(
                     Component.text("Default gamemode changed to ", NamedTextColor.GREEN)
                         .append(Component.text(nextMode.toString(), NamedTextColor.GOLD))
                 )
                 open(player, world) // Refresh GUI
             }
+        debugLogger.debugMethodExit("createGameModeItem")
+        return item
     }
 
     private fun createSetSpawnItem(player: Player, world: PlayerWorld): GuiItem {
-        return ItemBuilder.from(Material.RED_BED)
+        debugLogger.debugMethodEntry("createSetSpawnItem", "player" to player.name, "worldName" to world.name)
+        val item = ItemBuilder.from(Material.RED_BED)
             .name(Component.text("Set Spawn Point", NamedTextColor.RED))
             .lore(
                 listOf(
@@ -255,20 +306,26 @@ class WorldManageGui(
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} setting spawn point in world ${world.name}")
+                debugLogger.debug("Set Spawn button clicked", "player" to player.name, "worldName" to world.name)
                 player.closeInventory()
                 player.scheduler.run(plugin, { _ ->
                     val location = player.location
+                    debugLogger.debug("Setting spawn location", "worldName" to world.name, "x" to location.blockX, "y" to location.blockY, "z" to location.blockZ)
                     worldManager.setSpawnLocation(world, location)
                     plugin.logger.info("[GUI] WorldManageGui: Spawn point set for world ${world.name} at ${location.blockX}, ${location.blockY}, ${location.blockZ}")
+                    debugLogger.debug("Spawn point set successfully", "worldName" to world.name)
                     player.sendMessage(
                         Component.text("Spawn point set to your current location", NamedTextColor.GREEN)
                     )
                 }, null)
             }
+        debugLogger.debugMethodExit("createSetSpawnItem")
+        return item
     }
 
     private fun createInvitePlayerItem(player: Player, world: PlayerWorld): GuiItem {
-        return ItemBuilder.from(Material.NAME_TAG)
+        debugLogger.debugMethodEntry("createInvitePlayerItem", "player" to player.name, "worldName" to world.name)
+        val item = ItemBuilder.from(Material.NAME_TAG)
             .name(Component.text("Invite Player", NamedTextColor.GREEN))
             .lore(
                 listOf(
@@ -279,6 +336,7 @@ class WorldManageGui(
             )
             .asGuiItem { event ->
                 event.isCancelled = true
+                debugLogger.debug("Invite Player button clicked", "player" to player.name, "worldName" to world.name)
                 player.closeInventory()
                 player.sendMessage(
                     Component.text("Use ", NamedTextColor.YELLOW)
@@ -287,12 +345,16 @@ class WorldManageGui(
                         .append(Component.text(world.name, NamedTextColor.GOLD))
                 )
             }
+        debugLogger.debugMethodExit("createInvitePlayerItem")
+        return item
     }
 
     private fun createKickPlayerItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createKickPlayerItem", "player" to player.name, "worldName" to world.name)
         val invitedCount = world.invitedPlayers.size
+        debugLogger.debugState("KickPlayerItem", "invitedCount" to invitedCount)
 
-        return ItemBuilder.from(Material.BARRIER)
+        val item = ItemBuilder.from(Material.BARRIER)
             .name(Component.text("Kick Player", NamedTextColor.RED))
             .lore(
                 listOf(
@@ -303,6 +365,7 @@ class WorldManageGui(
             )
             .asGuiItem { event ->
                 event.isCancelled = true
+                debugLogger.debug("Kick Player button clicked", "player" to player.name, "worldName" to world.name)
                 player.closeInventory()
                 player.sendMessage(
                     Component.text("Use ", NamedTextColor.YELLOW)
@@ -311,10 +374,13 @@ class WorldManageGui(
                         .append(Component.text(world.name, NamedTextColor.GOLD))
                 )
             }
+        debugLogger.debugMethodExit("createKickPlayerItem")
+        return item
     }
 
     private fun createTransferOwnershipItem(player: Player, world: PlayerWorld): GuiItem {
-        return ItemBuilder.from(Material.GOLD_INGOT)
+        debugLogger.debugMethodEntry("createTransferOwnershipItem", "player" to player.name, "worldName" to world.name)
+        val item = ItemBuilder.from(Material.GOLD_INGOT)
             .name(Component.text("Transfer Ownership", NamedTextColor.GOLD))
             .lore(
                 listOf(
@@ -326,6 +392,7 @@ class WorldManageGui(
             )
             .asGuiItem { event ->
                 event.isCancelled = true
+                debugLogger.debug("Transfer Ownership button clicked", "player" to player.name, "worldName" to world.name)
                 player.closeInventory()
                 player.sendMessage(
                     Component.text("Use ", NamedTextColor.YELLOW)
@@ -334,24 +401,33 @@ class WorldManageGui(
                         .append(Component.text(world.name, NamedTextColor.GOLD))
                 )
             }
+        debugLogger.debugMethodExit("createTransferOwnershipItem")
+        return item
     }
 
     private fun createBackItem(player: Player): GuiItem {
-        return ItemBuilder.from(Material.ARROW)
+        debugLogger.debugMethodEntry("createBackItem", "player" to player.name)
+        val item = ItemBuilder.from(Material.ARROW)
             .name(Component.text("Back to Main Menu", NamedTextColor.YELLOW))
             .asGuiItem { event ->
                 event.isCancelled = true
                 plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} clicked Back to Main Menu")
+                debugLogger.debug("Back button clicked", "player" to player.name)
                 // Clear pending delete confirmation when navigating away
                 pendingDeletes.remove(player.uniqueId)
+                debugLogger.debug("Cleared pending delete confirmation", "player" to player.name)
                 player.closeInventory()
                 player.scheduler.run(plugin, { _ ->
+                    debugLogger.debug("Opening MainMenuGui", "player" to player.name)
                     MainMenuGui(plugin, worldManager, inviteManager, dataManager).open(player)
                 }, null)
             }
+        debugLogger.debugMethodExit("createBackItem")
+        return item
     }
 
     private fun createDeleteItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createDeleteItem", "player" to player.name, "worldName" to world.name)
         val currentTime = System.currentTimeMillis()
         val pendingDelete = pendingDeletes[player.uniqueId]
 
@@ -364,8 +440,14 @@ class WorldManageGui(
         val material = if (needsConfirmation) Material.TNT else Material.BARRIER
         val name = if (needsConfirmation) "Delete World" else "Click again to confirm deletion"
         val color = if (needsConfirmation) NamedTextColor.RED else NamedTextColor.DARK_RED
+        debugLogger.debugState("DeleteItem",
+            "needsConfirmation" to needsConfirmation,
+            "hasPendingDelete" to hasPendingDelete,
+            "worldName" to world.name,
+            "timeSinceLastClick" to if (pendingDelete != null) (currentTime - pendingDelete.timestamp) else "N/A"
+        )
 
-        return ItemBuilder.from(material)
+        val item = ItemBuilder.from(material)
             .name(Component.text(name, color))
             .lore(
                 listOf(
@@ -385,6 +467,7 @@ class WorldManageGui(
                     // First click: add to pending deletes
                     pendingDeletes[player.uniqueId] = PendingDelete(world.id, currentTime)
                     plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} clicked delete for world ${world.name} (first click)")
+                    debugLogger.debug("Delete button clicked (first click)", "player" to player.name, "worldName" to world.name)
                     player.sendMessage(
                         Component.text("Click delete again to confirm deletion of ", NamedTextColor.YELLOW)
                             .append(Component.text(world.name, NamedTextColor.GOLD))
@@ -394,6 +477,7 @@ class WorldManageGui(
                     // Second click: execute delete and remove from pending
                     pendingDeletes.remove(player.uniqueId)
                     plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} confirmed deletion of world ${world.name}")
+                    debugLogger.debug("Delete button clicked (confirmation)", "player" to player.name, "worldName" to world.name, "worldId" to world.id)
                     player.closeInventory()
                     player.sendMessage(
                         Component.text("Deleting world ", NamedTextColor.YELLOW)
@@ -401,9 +485,11 @@ class WorldManageGui(
                             .append(Component.text("...", NamedTextColor.YELLOW))
                     )
 
+                    debugLogger.debug("Initiating world deletion", "worldName" to world.name)
                     worldManager.deleteWorld(world).thenAccept { result ->
                         result.onSuccess {
                             plugin.logger.info("[GUI] WorldManageGui: Successfully deleted world ${world.name} for player ${player.name}")
+                            debugLogger.debug("World deletion successful", "worldName" to world.name)
                             player.scheduler.run(plugin, { _ ->
                                 player.sendMessage(
                                     Component.text("Successfully deleted world ", NamedTextColor.GREEN)
@@ -412,6 +498,7 @@ class WorldManageGui(
                             }, null)
                         }.onFailure { error ->
                             plugin.logger.warning("[GUI] WorldManageGui: Failed to delete world ${world.name} for player ${player.name}: ${error.message}")
+                            debugLogger.debug("World deletion failed", "worldName" to world.name, "error" to error.message)
                             player.scheduler.run(plugin, { _ ->
                                 player.sendMessage(
                                     Component.text("Failed to delete world: ${error.message}", NamedTextColor.RED)
@@ -421,5 +508,7 @@ class WorldManageGui(
                     }
                 }
             }
+        debugLogger.debugMethodExit("createDeleteItem")
+        return item
     }
 }

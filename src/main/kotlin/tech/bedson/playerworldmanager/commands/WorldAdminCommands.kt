@@ -20,6 +20,7 @@ import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
+import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.CompletableFuture
@@ -35,6 +36,7 @@ class WorldAdminCommands(
     private val dataManager: DataManager,
     private val adminMenuGui: AdminMenuGui
 ) {
+    private val debugLogger = DebugLogger(plugin, "WorldAdminCommands")
     private val purgeConfirmations = ConcurrentHashMap<String, PurgeConfirmation>()
 
     private data class PurgeConfirmation(
@@ -147,45 +149,61 @@ class WorldAdminCommands(
     // ========================
 
     private fun handleList(ctx: CommandContext<CommandSourceStack>): Int {
-        return handleListWithParams(ctx, null, 1)
+        debugLogger.debugMethodEntry("handleList", "sender" to ctx.source.sender.name)
+        val result = handleListWithParams(ctx, null, 1)
+        debugLogger.debugMethodExit("handleList", result)
+        return result
     }
 
     private fun handleListPlayer(ctx: CommandContext<CommandSourceStack>): Int {
         val playerName = StringArgumentType.getString(ctx, "player")
-        return handleListWithParams(ctx, playerName, 1)
+        debugLogger.debugMethodEntry("handleListPlayer", "sender" to ctx.source.sender.name, "playerName" to playerName)
+        val result = handleListWithParams(ctx, playerName, 1)
+        debugLogger.debugMethodExit("handleListPlayer", result)
+        return result
     }
 
     private fun handleListPlayerPage(ctx: CommandContext<CommandSourceStack>): Int {
         val playerName = StringArgumentType.getString(ctx, "player")
         val page = IntegerArgumentType.getInteger(ctx, "page")
-        return handleListWithParams(ctx, playerName, page)
+        debugLogger.debugMethodEntry("handleListPlayerPage", "sender" to ctx.source.sender.name, "playerName" to playerName, "page" to page)
+        val result = handleListWithParams(ctx, playerName, page)
+        debugLogger.debugMethodExit("handleListPlayerPage", result)
+        return result
     }
 
     private fun handleListWithParams(ctx: CommandContext<CommandSourceStack>, playerName: String?, page: Int): Int {
+        debugLogger.debugMethodEntry("handleListWithParams", "sender" to ctx.source.sender.name, "playerName" to playerName, "page" to page)
         plugin.logger.info("[WorldAdminCommands] handleListWithParams: Executing admin list command (player='$playerName', page=$page)")
         val sender = ctx.source.sender
 
         val worlds = if (playerName != null) {
             plugin.logger.info("[WorldAdminCommands] handleListWithParams: Listing worlds for specific player '$playerName'")
             val targetPlayer = Bukkit.getOfflinePlayer(playerName)
-            if (!targetPlayer.hasPlayedBefore() && !targetPlayer.isOnline) {
+            val targetExists = targetPlayer.hasPlayedBefore() || targetPlayer.isOnline
+            debugLogger.debug("Target player lookup", "playerName" to playerName, "exists" to targetExists, "uuid" to targetPlayer.uniqueId)
+            if (!targetExists) {
                 plugin.logger.warning("[WorldAdminCommands] handleListWithParams: Player '$playerName' not found")
                 sender.sendMessage(
                     Component.text("Player '", NamedTextColor.RED)
                         .append(Component.text(playerName, NamedTextColor.GOLD))
                         .append(Component.text("' not found", NamedTextColor.RED))
                 )
+                debugLogger.debugMethodExit("handleListWithParams", "player not found")
                 return Command.SINGLE_SUCCESS
             }
             dataManager.getWorldsByOwner(targetPlayer.uniqueId)
         } else {
             plugin.logger.info("[WorldAdminCommands] handleListWithParams: Listing all worlds")
+            debugLogger.debug("Listing all worlds")
             dataManager.getAllWorlds()
         }
 
+        debugLogger.debug("Worlds retrieved", "count" to worlds.size)
         if (worlds.isEmpty()) {
             plugin.logger.info("[WorldAdminCommands] handleListWithParams: No worlds found")
             sender.sendMessage(Component.text("No worlds found", NamedTextColor.YELLOW))
+            debugLogger.debugMethodExit("handleListWithParams", "no worlds")
             return Command.SINGLE_SUCCESS
         }
 
@@ -194,6 +212,7 @@ class WorldAdminCommands(
         val actualPage = page.coerceIn(1, totalPages)
         val startIndex = (actualPage - 1) * pageSize
         val endIndex = minOf(startIndex + pageSize, worlds.size)
+        debugLogger.debug("Pagination", "totalWorlds" to worlds.size, "pageSize" to pageSize, "totalPages" to totalPages, "actualPage" to actualPage, "startIndex" to startIndex, "endIndex" to endIndex)
 
         plugin.logger.info("[WorldAdminCommands] handleListWithParams: Displaying ${worlds.size} world(s) (page $actualPage/$totalPages)")
 
@@ -218,15 +237,22 @@ class WorldAdminCommands(
         }
 
         plugin.logger.info("[WorldAdminCommands] handleListWithParams: Command completed successfully")
+        debugLogger.debugMethodExit("handleListWithParams", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleInfo(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleInfo", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleInfo: Executing admin info command")
         val sender = ctx.source.sender
-        val world = findWorld(ctx) ?: return Command.SINGLE_SUCCESS
+        val world = findWorld(ctx)
+        if (world == null) {
+            debugLogger.debugMethodExit("handleInfo", "world not found")
+            return Command.SINGLE_SUCCESS
+        }
 
         plugin.logger.info("[WorldAdminCommands] handleInfo: Retrieving info for world '${world.name}' owned by ${world.ownerName}")
+        debugLogger.debugState("PlayerWorld", "id" to world.id, "name" to world.name, "ownerUuid" to world.ownerUuid, "isEnabled" to world.isEnabled)
 
         val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
         val createdDate = dateFormat.format(Date(world.createdAt))
@@ -238,6 +264,7 @@ class WorldAdminCommands(
                 onlinePlayers.addAll(bukkitWorld.players.map { it.name })
             }
         }
+        debugLogger.debug("Online players in world", "worldName" to world.name, "count" to onlinePlayers.size, "players" to onlinePlayers)
 
         plugin.logger.info("[WorldAdminCommands] handleInfo: World '${world.name}' has ${onlinePlayers.size} online player(s), ${world.invitedPlayers.size} invited player(s)")
 
@@ -274,24 +301,34 @@ class WorldAdminCommands(
         )
 
         plugin.logger.info("[WorldAdminCommands] handleInfo: Command completed successfully")
+        debugLogger.debugMethodExit("handleInfo", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleTeleport(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleTeleport", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleTeleport: Executing admin teleport command")
         val sender = ctx.source.sender
+        debugLogger.debug("Sender type check", "isPlayer" to (sender is Player), "senderType" to sender.javaClass.simpleName)
         if (sender !is Player) {
             plugin.logger.warning("[WorldAdminCommands] handleTeleport: Non-player attempted to execute command")
             sender.sendMessage(Component.text("This command can only be used by players", NamedTextColor.RED))
+            debugLogger.debugMethodExit("handleTeleport", "not a player")
             return Command.SINGLE_SUCCESS
         }
 
-        val world = findWorld(ctx) ?: return Command.SINGLE_SUCCESS
+        val world = findWorld(ctx)
+        if (world == null) {
+            debugLogger.debugMethodExit("handleTeleport", "world not found")
+            return Command.SINGLE_SUCCESS
+        }
 
         plugin.logger.info("[WorldAdminCommands] handleTeleport: Admin ${sender.name} teleporting to world '${world.name}'")
+        debugLogger.debug("Teleporting admin", "adminName" to sender.name, "worldName" to world.name, "worldId" to world.id)
         sender.sendMessage(Component.text("Teleporting...", NamedTextColor.YELLOW))
 
         worldManager.teleportToWorld(sender, world).thenAccept { success ->
+            debugLogger.debug("Admin teleport result", "success" to success, "worldName" to world.name)
             sender.scheduler.run(plugin, { _ ->
                 if (success) {
                     plugin.logger.info("[WorldAdminCommands] handleTeleport: Admin ${sender.name} teleported successfully to '${world.name}'")
@@ -306,19 +343,27 @@ class WorldAdminCommands(
             }, null)
         }
 
+        debugLogger.debugMethodExit("handleTeleport", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleDelete(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleDelete", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleDelete: Executing admin delete command")
         val sender = ctx.source.sender
-        val world = findWorld(ctx) ?: return Command.SINGLE_SUCCESS
+        val world = findWorld(ctx)
+        if (world == null) {
+            debugLogger.debugMethodExit("handleDelete", "world not found")
+            return Command.SINGLE_SUCCESS
+        }
 
         plugin.logger.info("[WorldAdminCommands] handleDelete: Admin deleting world '${world.name}' owned by ${world.ownerName}")
+        debugLogger.debug("Deleting world", "worldName" to world.name, "worldId" to world.id, "ownerName" to world.ownerName)
         sender.sendMessage(Component.text("Deleting world...", NamedTextColor.YELLOW))
 
         worldManager.deleteWorld(world).thenAccept { result ->
             result.onSuccess {
+                debugLogger.debug("World deletion succeeded", "worldName" to world.name)
                 plugin.logger.info("[WorldAdminCommands] handleDelete: World '${world.name}' deleted successfully")
                 sender.sendMessage(
                     Component.text("World '", NamedTextColor.GREEN)
@@ -326,6 +371,7 @@ class WorldAdminCommands(
                         .append(Component.text("' deleted", NamedTextColor.GREEN))
                 )
             }.onFailure { error ->
+                debugLogger.debug("World deletion failed", "worldName" to world.name, "error" to error.message)
                 plugin.logger.warning("[WorldAdminCommands] handleDelete: Failed to delete world '${world.name}': ${error.message}")
                 sender.sendMessage(
                     Component.text("Failed: ", NamedTextColor.RED)
@@ -334,21 +380,30 @@ class WorldAdminCommands(
             }
         }
 
+        debugLogger.debugMethodExit("handleDelete", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleDisable(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleDisable", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleDisable: Executing admin disable command")
         val sender = ctx.source.sender
-        val world = findWorld(ctx) ?: return Command.SINGLE_SUCCESS
+        val world = findWorld(ctx)
+        if (world == null) {
+            debugLogger.debugMethodExit("handleDisable", "world not found")
+            return Command.SINGLE_SUCCESS
+        }
 
+        debugLogger.debug("World state", "worldName" to world.name, "isEnabled" to world.isEnabled)
         if (!world.isEnabled) {
             plugin.logger.info("[WorldAdminCommands] handleDisable: World '${world.name}' is already disabled")
             sender.sendMessage(Component.text("World is already disabled", NamedTextColor.YELLOW))
+            debugLogger.debugMethodExit("handleDisable", "already disabled")
             return Command.SINGLE_SUCCESS
         }
 
         plugin.logger.info("[WorldAdminCommands] handleDisable: Disabling world '${world.name}' owned by ${world.ownerName}")
+        debugLogger.debug("Disabling world", "worldName" to world.name, "worldId" to world.id)
         world.isEnabled = false
         dataManager.saveWorld(world)
 
@@ -360,10 +415,15 @@ class WorldAdminCommands(
 
         // Kick players from world
         val defaultWorld = Bukkit.getWorlds().firstOrNull()
+        debugLogger.debug("Default world for kick", "defaultWorld" to defaultWorld?.name)
         if (defaultWorld != null) {
             plugin.logger.info("[WorldAdminCommands] handleDisable: Kicking players from disabled world '${world.name}'")
             for (env in World.Environment.entries) {
-                worldManager.getBukkitWorld(world, env)?.players?.forEach { player ->
+                val bukkitWorld = worldManager.getBukkitWorld(world, env)
+                val players = bukkitWorld?.players ?: emptyList()
+                debugLogger.debug("Players in dimension", "environment" to env, "playerCount" to players.size)
+                players.forEach { player ->
+                    debugLogger.debug("Kicking player from disabled world", "player" to player.name)
                     plugin.logger.info("[WorldAdminCommands] handleDisable: Teleporting ${player.name} out of disabled world")
                     player.teleportAsync(defaultWorld.spawnLocation).thenAccept {
                         player.sendMessage(Component.text("World disabled by admin", NamedTextColor.RED))
@@ -373,25 +433,36 @@ class WorldAdminCommands(
         }
 
         plugin.logger.info("[WorldAdminCommands] handleDisable: World '${world.name}' disabled successfully")
+        debugLogger.debugMethodExit("handleDisable", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleEnable(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleEnable", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleEnable: Executing admin enable command")
         val sender = ctx.source.sender
-        val world = findWorld(ctx) ?: return Command.SINGLE_SUCCESS
+        val world = findWorld(ctx)
+        if (world == null) {
+            debugLogger.debugMethodExit("handleEnable", "world not found")
+            return Command.SINGLE_SUCCESS
+        }
 
+        debugLogger.debug("World state", "worldName" to world.name, "isEnabled" to world.isEnabled)
         if (world.isEnabled) {
             plugin.logger.info("[WorldAdminCommands] handleEnable: World '${world.name}' is already enabled")
             sender.sendMessage(Component.text("World is already enabled", NamedTextColor.YELLOW))
+            debugLogger.debugMethodExit("handleEnable", "already enabled")
             return Command.SINGLE_SUCCESS
         }
 
         plugin.logger.info("[WorldAdminCommands] handleEnable: Enabling world '${world.name}' owned by ${world.ownerName}")
+        debugLogger.debug("Enabling world", "worldName" to world.name, "worldId" to world.id)
         world.isEnabled = true
         dataManager.saveWorld(world)
 
+        debugLogger.debug("Loading world after enable", "worldName" to world.name)
         worldManager.loadWorld(world).thenAccept { success ->
+            debugLogger.debug("World load result", "worldName" to world.name, "success" to success)
             if (success) {
                 plugin.logger.info("[WorldAdminCommands] handleEnable: World '${world.name}' enabled and loaded successfully")
             } else {
@@ -407,31 +478,39 @@ class WorldAdminCommands(
             )
         }
 
+        debugLogger.debugMethodExit("handleEnable", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleSetLimit(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleSetLimit", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleSetLimit: Executing admin setlimit command")
         val sender = ctx.source.sender
         val playerName = StringArgumentType.getString(ctx, "player")
         val limit = IntegerArgumentType.getInteger(ctx, "limit")
+        debugLogger.debug("Parsed arguments", "playerName" to playerName, "limit" to limit)
 
         plugin.logger.info("[WorldAdminCommands] handleSetLimit: Setting world limit for '$playerName' to $limit")
 
         val target = Bukkit.getOfflinePlayer(playerName)
-        if (!target.hasPlayedBefore() && !target.isOnline) {
+        val targetExists = target.hasPlayedBefore() || target.isOnline
+        debugLogger.debug("Target player lookup", "playerName" to playerName, "uuid" to target.uniqueId, "exists" to targetExists)
+        if (!targetExists) {
             plugin.logger.warning("[WorldAdminCommands] handleSetLimit: Player '$playerName' not found")
             sender.sendMessage(
                 Component.text("Player '", NamedTextColor.RED)
                     .append(Component.text(playerName, NamedTextColor.GOLD))
                     .append(Component.text("' not found", NamedTextColor.RED))
             )
+            debugLogger.debugMethodExit("handleSetLimit", "player not found")
             return Command.SINGLE_SUCCESS
         }
 
         val playerData = dataManager.getOrCreatePlayerData(target.uniqueId, target.name ?: playerName)
+        debugLogger.debug("Player data before update", "uuid" to playerData.uuid, "currentLimit" to playerData.worldLimit)
         playerData.worldLimit = limit
         dataManager.savePlayerData(playerData)
+        debugLogger.debug("Player data after update", "uuid" to playerData.uuid, "newLimit" to playerData.worldLimit)
 
         val limitText = if (limit == -1) "unlimited" else limit.toString()
         plugin.logger.info("[WorldAdminCommands] handleSetLimit: World limit set to $limitText for '${target.name ?: playerName}'")
@@ -442,26 +521,33 @@ class WorldAdminCommands(
                 .append(Component.text(limitText, NamedTextColor.GOLD))
         )
 
+        debugLogger.debugMethodExit("handleSetLimit", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handlePurge(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handlePurge", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handlePurge: Executing admin purge command")
         val sender = ctx.source.sender
         val days = IntegerArgumentType.getInteger(ctx, "days")
+        debugLogger.debug("Parsed arguments", "days" to days)
 
         plugin.logger.info("[WorldAdminCommands] handlePurge: Purging worlds older than $days days")
 
         val cutoffTime = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
         val worldsToDelete = dataManager.getAllWorlds().filter { it.createdAt < cutoffTime }
+        debugLogger.debug("Worlds to purge", "cutoffTime" to cutoffTime, "worldCount" to worldsToDelete.size)
 
         val senderKey = if (sender is Player) sender.uniqueId.toString() else "console"
         val existingConfirmation = purgeConfirmations[senderKey]
+        debugLogger.debug("Confirmation check", "senderKey" to senderKey, "hasExisting" to (existingConfirmation != null))
 
-        if (existingConfirmation == null ||
+        val needsConfirmation = existingConfirmation == null ||
             existingConfirmation.days != days ||
-            System.currentTimeMillis() - existingConfirmation.timestamp > 30000) {
+            System.currentTimeMillis() - existingConfirmation.timestamp > 30000
+        debugLogger.debug("Confirmation status", "needsConfirmation" to needsConfirmation)
 
+        if (needsConfirmation) {
             plugin.logger.info("[WorldAdminCommands] handlePurge: Requesting confirmation to delete ${worldsToDelete.size} world(s)")
             purgeConfirmations[senderKey] = PurgeConfirmation(days, worldsToDelete.size, System.currentTimeMillis())
 
@@ -470,18 +556,22 @@ class WorldAdminCommands(
                     .append(Component.text("This will delete ${worldsToDelete.size} worlds older than $days days", NamedTextColor.YELLOW))
             )
             sender.sendMessage(Component.text("Run again within 30 seconds to confirm", NamedTextColor.YELLOW))
+            debugLogger.debugMethodExit("handlePurge", "waiting for confirmation")
             return Command.SINGLE_SUCCESS
         }
 
         purgeConfirmations.remove(senderKey)
+        debugLogger.debug("Confirmation accepted, proceeding with purge")
 
         if (worldsToDelete.isEmpty()) {
             plugin.logger.info("[WorldAdminCommands] handlePurge: No worlds to purge")
             sender.sendMessage(Component.text("No worlds to purge", NamedTextColor.YELLOW))
+            debugLogger.debugMethodExit("handlePurge", "no worlds to purge")
             return Command.SINGLE_SUCCESS
         }
 
         plugin.logger.info("[WorldAdminCommands] handlePurge: Starting purge of ${worldsToDelete.size} world(s)")
+        debugLogger.debug("Starting purge", "worldCount" to worldsToDelete.size, "worldNames" to worldsToDelete.map { it.name })
         sender.sendMessage(Component.text("Purging ${worldsToDelete.size} worlds...", NamedTextColor.YELLOW))
 
         var deleted = 0
@@ -489,8 +579,10 @@ class WorldAdminCommands(
         worldsToDelete.forEach { world ->
             worldManager.deleteWorld(world).thenAccept { result ->
                 if (result.isSuccess) deleted++ else failed++
+                debugLogger.debug("World purge result", "worldName" to world.name, "success" to result.isSuccess, "deleted" to deleted, "failed" to failed)
                 if (deleted + failed == worldsToDelete.size) {
                     plugin.logger.info("[WorldAdminCommands] handlePurge: Purge complete. Deleted: $deleted, Failed: $failed")
+                    debugLogger.debug("Purge complete", "deleted" to deleted, "failed" to failed)
                     sender.sendMessage(
                         Component.text("Purge complete. Deleted: $deleted, Failed: $failed", NamedTextColor.GREEN)
                     )
@@ -498,10 +590,12 @@ class WorldAdminCommands(
             }
         }
 
+        debugLogger.debugMethodExit("handlePurge", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleStats(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleStats", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleStats: Executing admin stats command")
         val sender = ctx.source.sender
         val allWorlds = dataManager.getAllWorlds()
@@ -509,6 +603,7 @@ class WorldAdminCommands(
 
         val enabledCount = allWorlds.count { it.isEnabled }
         val disabledCount = allWorlds.count { !it.isEnabled }
+        debugLogger.debug("Statistics", "totalWorlds" to allWorlds.size, "enabledCount" to enabledCount, "disabledCount" to disabledCount, "playerCount" to allPlayers.size)
 
         plugin.logger.info("[WorldAdminCommands] handleStats: Total worlds: ${allWorlds.size}, Enabled: $enabledCount, Disabled: $disabledCount, Players: ${allPlayers.size}")
 
@@ -531,20 +626,28 @@ class WorldAdminCommands(
         )
 
         plugin.logger.info("[WorldAdminCommands] handleStats: Command completed successfully")
+        debugLogger.debugMethodExit("handleStats", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleReload(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleReload", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleReload: Executing admin reload command")
         val sender = ctx.source.sender
 
         try {
             plugin.logger.info("[WorldAdminCommands] handleReload: Reloading plugin configuration")
+            debugLogger.debug("Reloading config")
             plugin.reloadConfig()
+            debugLogger.debug("Reloading data manager")
             dataManager.loadAll()
+            // Refresh debug state after config reload
+            DebugLogger.refreshDebugState()
+            debugLogger.debug("Config reload complete")
             plugin.logger.info("[WorldAdminCommands] handleReload: Configuration reloaded successfully")
             sender.sendMessage(Component.text("Configuration reloaded", NamedTextColor.GREEN))
         } catch (e: Exception) {
+            debugLogger.debug("Config reload failed", "error" to e.message)
             plugin.logger.warning("[WorldAdminCommands] handleReload: Failed to reload configuration: ${e.message}")
             sender.sendMessage(
                 Component.text("Failed to reload: ", NamedTextColor.RED)
@@ -552,28 +655,36 @@ class WorldAdminCommands(
             )
         }
 
+        debugLogger.debugMethodExit("handleReload", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleMenu(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleMenu", "sender" to ctx.source.sender.name)
         plugin.logger.info("[WorldAdminCommands] handleMenu: Executing admin menu command")
         val sender = ctx.source.sender
+        debugLogger.debug("Sender type check", "isPlayer" to (sender is Player), "senderType" to sender.javaClass.simpleName)
         if (sender !is Player) {
             plugin.logger.warning("[WorldAdminCommands] handleMenu: Non-player attempted to execute command")
             sender.sendMessage(Component.text("This command can only be used by players", NamedTextColor.RED))
+            debugLogger.debugMethodExit("handleMenu", "not a player")
             return Command.SINGLE_SUCCESS
         }
 
         plugin.logger.info("[WorldAdminCommands] handleMenu: Opening admin menu GUI for ${sender.name}")
+        debugLogger.debug("Opening admin menu GUI", "player" to sender.name, "playerUuid" to sender.uniqueId)
         adminMenuGui.open(sender)
 
         plugin.logger.info("[WorldAdminCommands] handleMenu: Command completed for ${sender.name}")
+        debugLogger.debugMethodExit("handleMenu", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
     private fun handleHelp(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleHelp", "sender" to ctx.source.sender.name)
         val sender = ctx.source.sender
 
+        debugLogger.debug("Displaying help", "senderName" to sender.name)
         sender.sendMessage(Component.text("=== World Admin Commands ===", NamedTextColor.DARK_PURPLE))
         sender.sendMessage(Component.text("/worldadmin list [player] [page]", NamedTextColor.GRAY)
             .append(Component.text(" - List worlds", NamedTextColor.YELLOW)))
@@ -596,6 +707,7 @@ class WorldAdminCommands(
         sender.sendMessage(Component.text("/worldadmin menu", NamedTextColor.GRAY)
             .append(Component.text(" - Open GUI", NamedTextColor.YELLOW)))
 
+        debugLogger.debugMethodExit("handleHelp", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
@@ -635,22 +747,27 @@ class WorldAdminCommands(
         val ownerName = StringArgumentType.getString(ctx, "owner")
         val worldName = StringArgumentType.getString(ctx, "world")
         val sender = ctx.source.sender
+        debugLogger.debugMethodEntry("findWorld", "ownerName" to ownerName, "worldName" to worldName)
 
         plugin.logger.info("[WorldAdminCommands] findWorld: Looking up world '$worldName' owned by '$ownerName'")
 
         val owner = Bukkit.getOfflinePlayer(ownerName)
-        if (!owner.hasPlayedBefore() && !owner.isOnline) {
+        val ownerExists = owner.hasPlayedBefore() || owner.isOnline
+        debugLogger.debug("Owner lookup", "ownerName" to ownerName, "ownerUuid" to owner.uniqueId, "exists" to ownerExists)
+        if (!ownerExists) {
             plugin.logger.warning("[WorldAdminCommands] findWorld: Owner '$ownerName' not found")
             sender.sendMessage(
                 Component.text("Player '", NamedTextColor.RED)
                     .append(Component.text(ownerName, NamedTextColor.GOLD))
                     .append(Component.text("' not found", NamedTextColor.RED))
             )
+            debugLogger.debugMethodExit("findWorld", null)
             return null
         }
 
         val world = dataManager.getWorldsByOwner(owner.uniqueId)
             .firstOrNull { it.name.equals(worldName, ignoreCase = true) }
+        debugLogger.debug("World lookup", "ownerUuid" to owner.uniqueId, "worldName" to worldName, "found" to (world != null))
 
         if (world == null) {
             plugin.logger.warning("[WorldAdminCommands] findWorld: World '$worldName' not found for owner '$ownerName'")
@@ -659,8 +776,10 @@ class WorldAdminCommands(
                     .append(Component.text(worldName, NamedTextColor.GOLD))
                     .append(Component.text("'", NamedTextColor.RED))
             )
+            debugLogger.debugMethodExit("findWorld", null)
         } else {
             plugin.logger.info("[WorldAdminCommands] findWorld: Found world '${world.name}' (ID: ${world.id})")
+            debugLogger.debugMethodExit("findWorld", world.name)
         }
 
         return world

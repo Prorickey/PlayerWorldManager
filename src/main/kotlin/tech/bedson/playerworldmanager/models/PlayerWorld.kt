@@ -1,6 +1,8 @@
 package tech.bedson.playerworldmanager.models
 
 import org.bukkit.GameMode
+import org.bukkit.plugin.java.JavaPlugin
+import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.util.UUID
 
 /**
@@ -20,7 +22,60 @@ data class PlayerWorld(
     var defaultGameMode: GameMode = GameMode.SURVIVAL,
     var timeLock: TimeLock = TimeLock.CYCLE,    // DAY, NIGHT, CYCLE
     var weatherLock: WeatherLock = WeatherLock.CYCLE  // CLEAR, RAIN, CYCLE
-)
+) {
+    companion object {
+        /**
+         * Create a PlayerWorld with debug logging.
+         */
+        fun createWithLogging(
+            plugin: JavaPlugin,
+            id: UUID,
+            name: String,
+            ownerUuid: UUID,
+            ownerName: String,
+            worldType: WorldType,
+            seed: Long?,
+            createdAt: Long,
+            isEnabled: Boolean = true,
+            invitedPlayers: MutableSet<UUID> = mutableSetOf(),
+            spawnLocation: SimpleLocation? = null,
+            defaultGameMode: GameMode = GameMode.SURVIVAL,
+            timeLock: TimeLock = TimeLock.CYCLE,
+            weatherLock: WeatherLock = WeatherLock.CYCLE
+        ): PlayerWorld {
+            val debugLogger = DebugLogger(plugin, "PlayerWorld")
+            debugLogger.debug("Creating PlayerWorld",
+                "id" to id,
+                "name" to name,
+                "owner" to ownerName,
+                "ownerUuid" to ownerUuid,
+                "type" to worldType,
+                "seed" to seed
+            )
+            return PlayerWorld(
+                id, name, ownerUuid, ownerName, worldType, seed, createdAt,
+                isEnabled, invitedPlayers, spawnLocation, defaultGameMode, timeLock, weatherLock
+            )
+        }
+    }
+
+    /**
+     * Returns a debug-friendly string representation of this world.
+     */
+    fun toDebugString(): String {
+        return "PlayerWorld(id=$id, name=$name, owner=$ownerName/$ownerUuid, " +
+                "type=$worldType, seed=$seed, enabled=$isEnabled, " +
+                "invites=${invitedPlayers.size}, gameMode=$defaultGameMode, " +
+                "timeLock=$timeLock, weatherLock=$weatherLock)"
+    }
+
+    /**
+     * Returns a compact debug string for logging.
+     */
+    fun toCompactDebugString(): String {
+        return "PlayerWorld[$name, owner=$ownerName, type=$worldType]"
+    }
+}
 
 /**
  * Enum representing world generation types.
