@@ -21,8 +21,14 @@ data class PlayerWorld(
     var spawnLocation: SimpleLocation? = null,  // Custom spawn point
     var defaultGameMode: GameMode = GameMode.SURVIVAL,
     var timeLock: TimeLock = TimeLock.CYCLE,    // DAY, NIGHT, CYCLE
-    var weatherLock: WeatherLock = WeatherLock.CYCLE  // CLEAR, RAIN, CYCLE
+    var weatherLock: WeatherLock = WeatherLock.CYCLE,  // CLEAR, RAIN, CYCLE
+    private var _worldBorder: WorldBorderSettings? = null  // World border settings (nullable for Gson compatibility)
 ) {
+    // Public accessor that ensures a non-null WorldBorderSettings
+    var worldBorder: WorldBorderSettings
+        get() = _worldBorder ?: WorldBorderSettings.default().also { _worldBorder = it }
+        set(value) { _worldBorder = value }
+
     companion object {
         /**
          * Create a PlayerWorld with debug logging.
@@ -41,7 +47,8 @@ data class PlayerWorld(
             spawnLocation: SimpleLocation? = null,
             defaultGameMode: GameMode = GameMode.SURVIVAL,
             timeLock: TimeLock = TimeLock.CYCLE,
-            weatherLock: WeatherLock = WeatherLock.CYCLE
+            weatherLock: WeatherLock = WeatherLock.CYCLE,
+            worldBorder: WorldBorderSettings = WorldBorderSettings.default()
         ): PlayerWorld {
             val debugLogger = DebugLogger(plugin, "PlayerWorld")
             debugLogger.debug("Creating PlayerWorld",
@@ -54,7 +61,7 @@ data class PlayerWorld(
             )
             return PlayerWorld(
                 id, name, ownerUuid, ownerName, worldType, seed, createdAt,
-                isEnabled, invitedPlayers, spawnLocation, defaultGameMode, timeLock, weatherLock
+                isEnabled, invitedPlayers, spawnLocation, defaultGameMode, timeLock, weatherLock, _worldBorder = worldBorder
             )
         }
     }
@@ -66,7 +73,8 @@ data class PlayerWorld(
         return "PlayerWorld(id=$id, name=$name, owner=$ownerName/$ownerUuid, " +
                 "type=$worldType, seed=$seed, enabled=$isEnabled, " +
                 "invites=${invitedPlayers.size}, gameMode=$defaultGameMode, " +
-                "timeLock=$timeLock, weatherLock=$weatherLock)"
+                "timeLock=$timeLock, weatherLock=$weatherLock, " +
+                "border=${worldBorder.size})"
     }
 
     /**
@@ -104,4 +112,23 @@ enum class WeatherLock {
     CLEAR,
     RAIN,
     CYCLE
+}
+
+/**
+ * Data class representing world border settings.
+ * Mirrors Minecraft's vanilla world border features.
+ */
+data class WorldBorderSettings(
+    var size: Double = 60000000.0,           // Border diameter in blocks (default: Minecraft default)
+    var centerX: Double = 0.0,               // Center X coordinate
+    var centerZ: Double = 0.0,               // Center Z coordinate
+    var damageAmount: Double = 0.2,          // Damage per block per second outside buffer
+    var damageBuffer: Double = 5.0,          // Distance past border before damage starts
+    var warningDistance: Int = 5,            // Warning distance in blocks
+    var warningTime: Int = 15                // Warning time in seconds
+) {
+    companion object {
+        /** Default world border settings */
+        fun default() = WorldBorderSettings()
+    }
 }

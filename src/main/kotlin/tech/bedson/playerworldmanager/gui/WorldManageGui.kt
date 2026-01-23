@@ -73,6 +73,7 @@ class WorldManageGui(
         gui.setItem(10, createWeatherLockItem(player, world))
         gui.setItem(11, createGameModeItem(player, world))
         gui.setItem(12, createSetSpawnItem(player, world))
+        gui.setItem(13, createWorldBorderItem(player, world))
 
         // Row 3: Invite/Kick
         debugLogger.debug("Setting up Row 3: Invite/Kick")
@@ -320,6 +321,35 @@ class WorldManageGui(
                 }, null)
             }
         debugLogger.debugMethodExit("createSetSpawnItem")
+        return item
+    }
+
+    private fun createWorldBorderItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createWorldBorderItem", "player" to player.name, "worldName" to world.name)
+        val settings = world.worldBorder
+        val sizeDisplay = if (settings.size >= 60000000) "Unlimited" else "${settings.size.toLong()}"
+
+        val item = ItemBuilder.from(Material.STRUCTURE_VOID)
+            .name(Component.text("World Border", NamedTextColor.AQUA))
+            .lore(
+                listOf(
+                    Component.text("Current size: $sizeDisplay blocks", NamedTextColor.GRAY),
+                    Component.text("Center: ${settings.centerX.toLong()}, ${settings.centerZ.toLong()}", NamedTextColor.GRAY),
+                    Component.empty(),
+                    Component.text("Click to open border settings", NamedTextColor.YELLOW)
+                )
+            )
+            .asGuiItem { event ->
+                event.isCancelled = true
+                plugin.logger.info("[GUI] WorldManageGui: Player ${player.name} opening world border settings for world ${world.name}")
+                debugLogger.debug("World Border button clicked", "player" to player.name, "worldName" to world.name)
+                player.closeInventory()
+                player.scheduler.run(plugin, { _ ->
+                    debugLogger.debug("Opening WorldBorderGui", "player" to player.name, "worldName" to world.name)
+                    WorldBorderGui(plugin, worldManager, inviteManager, dataManager).open(player, world)
+                }, null)
+            }
+        debugLogger.debugMethodExit("createWorldBorderItem")
         return item
     }
 

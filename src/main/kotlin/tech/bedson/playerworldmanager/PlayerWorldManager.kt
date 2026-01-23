@@ -7,9 +7,11 @@ import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.commands.ChatCommands
 import tech.bedson.playerworldmanager.commands.TestCommands
 import tech.bedson.playerworldmanager.commands.WorldAdminCommands
+import tech.bedson.playerworldmanager.commands.WorldBorderCommands
 import tech.bedson.playerworldmanager.commands.WorldCommands
 import tech.bedson.playerworldmanager.gui.AdminMenuGui
 import tech.bedson.playerworldmanager.gui.MainMenuGui
+import tech.bedson.playerworldmanager.gui.WorldBorderGui
 import tech.bedson.playerworldmanager.listeners.AccessListener
 import tech.bedson.playerworldmanager.listeners.ChatListener
 import tech.bedson.playerworldmanager.listeners.WorldSessionListener
@@ -48,6 +50,7 @@ class PlayerWorldManager : JavaPlugin() {
     // GUIs
     private lateinit var mainMenuGui: MainMenuGui
     private lateinit var adminMenuGui: AdminMenuGui
+    private lateinit var worldBorderGui: WorldBorderGui
 
     override fun onEnable() {
         instance = this
@@ -85,6 +88,8 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("MainMenuGui created")
         adminMenuGui = AdminMenuGui(this, worldManager, inviteManager, dataManager)
         debugLogger.debug("AdminMenuGui created")
+        worldBorderGui = WorldBorderGui(this, worldManager, inviteManager, dataManager)
+        debugLogger.debug("WorldBorderGui created")
 
         // Load data
         debugLogger.debug("Loading data from disk...")
@@ -223,6 +228,16 @@ class PlayerWorldManager : JavaPlugin() {
             )
             debugLogger.debug("WorldAdminCommands registered")
 
+            // World border commands
+            debugLogger.debug("Registering WorldBorderCommands (/worldborder, /wb)...")
+            val worldBorderCommands = WorldBorderCommands(this, worldManager, dataManager, worldBorderGui)
+            registrar.register(
+                worldBorderCommands.build(),
+                "Manage world border settings",
+                listOf("wb")
+            )
+            debugLogger.debug("WorldBorderCommands registered")
+
             // Console test commands (for LLM/automated testing)
             debugLogger.debug("Registering TestCommands (/pwmtest, /pwmt)...")
             val testCommands = TestCommands(this, worldManager, inviteManager, dataManager)
@@ -270,5 +285,6 @@ class PlayerWorldManager : JavaPlugin() {
     fun getChatManager(): ChatManager = chatManager
     fun getMainMenuGui(): MainMenuGui = mainMenuGui
     fun getAdminMenuGui(): AdminMenuGui = adminMenuGui
+    fun getWorldBorderGui(): WorldBorderGui = worldBorderGui
     fun getDebugLogger(): DebugLogger = debugLogger
 }
