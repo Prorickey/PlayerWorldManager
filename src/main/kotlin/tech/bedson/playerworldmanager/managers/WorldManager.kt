@@ -1,6 +1,8 @@
 package tech.bedson.playerworldmanager.managers
 
 import com.google.common.collect.ImmutableList
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
 import com.mojang.serialization.Dynamic
 import net.minecraft.core.RegistryAccess
 import net.minecraft.core.registries.Registries
@@ -64,6 +66,17 @@ class WorldManager(
 
     private val logger: Logger = plugin.logger
     private val debugLogger = DebugLogger(plugin, "WorldManager")
+
+    // Reference to WorldUnloadManager (set after initialization to avoid circular dependency)
+    private var worldUnloadManager: WorldUnloadManager? = null
+
+    /**
+     * Set the WorldUnloadManager reference.
+     * This is called after both managers are created to avoid circular dependency.
+     */
+    fun setWorldUnloadManager(manager: WorldUnloadManager) {
+        this.worldUnloadManager = manager
+    }
 
     // World name validation regex (alphanumeric + underscores)
     private val namePattern = Regex("^[a-zA-Z0-9_]+$")
@@ -788,6 +801,7 @@ class WorldManager(
 
     /**
      * Teleport player to a world's spawn.
+     * If the world is unloaded, it will be loaded first and the player will see a loading message.
      *
      * @param player The player to teleport
      * @param world The world to teleport to
@@ -801,6 +815,49 @@ class WorldManager(
             "worldId" to world.id
         )
         logger.info("[WorldManager] teleportToWorld: Teleporting player '${player.name}' to world '${world.name}'")
+
+        // Check if world is unloaded and needs to be loaded first
+        val isUnloaded = worldUnloadManager?.isWorldUnloaded(world.id) == true ||
+                         getBukkitWorld(world) == null
+        debugLogger.debug("World load status check",
+            "worldName" to world.name,
+            "isUnloaded" to isUnloaded
+        )
+
+        if (isUnloaded) {
+            // World needs to be loaded first
+            logger.info("[WorldManager] teleportToWorld: World '${world.name}' is unloaded, loading first...")
+            player.sendMessage(
+                Component.text("Loading world...", NamedTextColor.YELLOW)
+            )
+
+            val future = CompletableFuture<Boolean>()
+
+            // Load the world first
+            loadWorld(world).thenAccept { loadSuccess ->
+                if (loadSuccess) {
+                    logger.info("[WorldManager] teleportToWorld: World '${world.name}' loaded successfully, proceeding with teleport")
+                    // Mark as loaded in unload manager
+                    worldUnloadManager?.markWorldLoaded(world.id)
+                    // Now teleport
+                    teleportToDimension(player, world, World.Environment.NORMAL).thenAccept { teleportSuccess ->
+                        future.complete(teleportSuccess)
+                    }
+                } else {
+                    logger.warning("[WorldManager] teleportToWorld: Failed to load world '${world.name}'")
+                    player.scheduler.run(plugin, { _ ->
+                        player.sendMessage(
+                            Component.text("Failed to load world", NamedTextColor.RED)
+                        )
+                    }, null)
+                    future.complete(false)
+                }
+            }
+
+            debugLogger.debugMethodExit("teleportToWorld", "loading world first")
+            return future
+        }
+
         val result = teleportToDimension(player, world, World.Environment.NORMAL)
         debugLogger.debug("Delegating to teleportToDimension", "environment" to World.Environment.NORMAL)
         return result
@@ -1201,8 +1258,56 @@ class WorldManager(
                 bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, true)
             }
         }
+
+        // Apply world border settings
+        applyWorldBorder(world, bukkitWorld)
+
         logger.info("[WorldManager] applyWorldSettings: Successfully applied settings to world '${world.name}'")
         debugLogger.debugMethodExit("applyWorldSettings", "success")
+    }
+
+    /**
+     * Apply world border settings to a Bukkit world.
+     *
+     * @param world The PlayerWorld containing border settings
+     * @param bukkitWorld The Bukkit world to apply border to (optional, will lookup if not provided)
+     */
+    fun applyWorldBorder(world: PlayerWorld, bukkitWorld: World? = null) {
+        debugLogger.debugMethodEntry("applyWorldBorder",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "borderSize" to world.worldBorder.size
+        )
+
+        val targetWorld = bukkitWorld ?: getBukkitWorld(world) ?: run {
+            logger.warning("[WorldManager] applyWorldBorder: Could not get Bukkit world for '${world.name}'")
+            debugLogger.debug("Cannot apply border - Bukkit world not found", "worldName" to world.name)
+            debugLogger.debugMethodExit("applyWorldBorder", "failed - no bukkit world")
+            return
+        }
+
+        val border = targetWorld.worldBorder
+        val settings = world.worldBorder
+
+        logger.info("[WorldManager] applyWorldBorder: Applying border to '${world.name}' - Size: ${settings.size}, Center: ${settings.centerX},${settings.centerZ}")
+
+        border.center = Location(targetWorld, settings.centerX, 0.0, settings.centerZ)
+        border.size = settings.size
+        border.damageAmount = settings.damageAmount
+        border.damageBuffer = settings.damageBuffer
+        border.warningDistance = settings.warningDistance
+        border.warningTime = settings.warningTime
+
+        debugLogger.debug("World border applied",
+            "size" to settings.size,
+            "centerX" to settings.centerX,
+            "centerZ" to settings.centerZ,
+            "damageAmount" to settings.damageAmount,
+            "damageBuffer" to settings.damageBuffer,
+            "warningDistance" to settings.warningDistance,
+            "warningTime" to settings.warningTime
+        )
+        debugLogger.debugMethodExit("applyWorldBorder", "success")
     }
 
     /**
