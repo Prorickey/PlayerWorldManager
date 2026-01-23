@@ -14,6 +14,7 @@ import tech.bedson.playerworldmanager.gui.MainMenuGui
 import tech.bedson.playerworldmanager.gui.WorldStatsGui
 import tech.bedson.playerworldmanager.listeners.AccessListener
 import tech.bedson.playerworldmanager.listeners.ChatListener
+import tech.bedson.playerworldmanager.listeners.WorldChangeListener
 import tech.bedson.playerworldmanager.listeners.StatsListener
 import tech.bedson.playerworldmanager.listeners.WorldSessionListener
 import tech.bedson.playerworldmanager.managers.ChatManager
@@ -22,6 +23,7 @@ import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.StatsManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.managers.WorldStateManager
+import tech.bedson.playerworldmanager.managers.WorldUnloadManager
 import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.io.File
 import java.nio.file.Paths
@@ -47,6 +49,7 @@ class PlayerWorldManager : JavaPlugin() {
     private lateinit var worldStateManager: WorldStateManager
     private lateinit var inviteManager: InviteManager
     private lateinit var chatManager: ChatManager
+    private lateinit var worldUnloadManager: WorldUnloadManager
     private lateinit var statsManager: StatsManager
     private var placeholderExpansion: PWMPlaceholderExpansion? = null
 
@@ -84,6 +87,12 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("InviteManager created")
         chatManager = ChatManager(this, dataManager)
         debugLogger.debug("ChatManager created")
+        worldUnloadManager = WorldUnloadManager(this, worldManager, dataManager)
+        debugLogger.debug("WorldUnloadManager created")
+
+        // Set cross-references between managers
+        worldManager.setWorldUnloadManager(worldUnloadManager)
+        debugLogger.debug("WorldUnloadManager reference set in WorldManager")
         statsManager = StatsManager(this, dataManager, worldManager)
         debugLogger.debug("StatsManager created")
 
@@ -115,6 +124,11 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("Initializing WorldManager (processing pending deletions and loading worlds)...")
         worldManager.initialize()
         debugLogger.debug("WorldManager initialized")
+
+        // Initialize world unload manager
+        debugLogger.debug("Initializing WorldUnloadManager...")
+        worldUnloadManager.initialize()
+        debugLogger.debug("WorldUnloadManager initialized")
 
         // Register Brigadier commands via LifecycleEventManager
         debugLogger.debug("Registering commands...")
@@ -185,6 +199,18 @@ class PlayerWorldManager : JavaPlugin() {
         }
         placeholderExpansion?.unregister()
 
+        // Shutdown world unload manager
+        if (::worldUnloadManager.isInitialized) {
+            if (::debugLogger.isInitialized) {
+                debugLogger.debug("Shutting down WorldUnloadManager...")
+            }
+            worldUnloadManager.shutdown()
+            if (::debugLogger.isInitialized) {
+                debugLogger.debug("WorldUnloadManager shutdown complete")
+                
+            }
+        }
+            
         // Save all statistics
         if (::statsManager.isInitialized) {
             if (::debugLogger.isInitialized) {
@@ -297,6 +323,10 @@ class PlayerWorldManager : JavaPlugin() {
         pluginManager.registerEvents(WorldSessionListener(this, worldManager, worldStateManager, dataManager), this)
         debugLogger.debug("WorldSessionListener registered")
 
+        // World change listener (tracks player entering/leaving worlds for auto-unload)
+        debugLogger.debug("Registering WorldChangeListener...")
+        pluginManager.registerEvents(WorldChangeListener(this, worldManager, worldUnloadManager), this)
+        debugLogger.debug("WorldChangeListener registered")
         // Statistics listener (tracks blocks, kills, deaths, etc.)
         debugLogger.debug("Registering StatsListener...")
         pluginManager.registerEvents(StatsListener(this, statsManager, worldManager), this)
@@ -311,6 +341,7 @@ class PlayerWorldManager : JavaPlugin() {
     fun getWorldStateManager(): WorldStateManager = worldStateManager
     fun getInviteManager(): InviteManager = inviteManager
     fun getChatManager(): ChatManager = chatManager
+    fun getWorldUnloadManager(): WorldUnloadManager = worldUnloadManager
     fun getStatsManager(): StatsManager = statsManager
     fun getMainMenuGui(): MainMenuGui = mainMenuGui
     fun getAdminMenuGui(): AdminMenuGui = adminMenuGui
