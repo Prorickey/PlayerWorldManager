@@ -26,3 +26,8 @@ worlds:
   default-type: "NORMAL"
   # Default world environment (NORMAL, NETHER, THE_END)
   default-environment: "NORMAL"
+  # Auto-unload settings for worlds with no players
+  auto-unload:
+    # Delay in minutes before unloading an empty world (default: 5)
+    # Set to -1 to disable auto-unloading
+    delay-minutes: 5

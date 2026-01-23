@@ -12,12 +12,14 @@ import tech.bedson.playerworldmanager.gui.AdminMenuGui
 import tech.bedson.playerworldmanager.gui.MainMenuGui
 import tech.bedson.playerworldmanager.listeners.AccessListener
 import tech.bedson.playerworldmanager.listeners.ChatListener
+import tech.bedson.playerworldmanager.listeners.WorldChangeListener
 import tech.bedson.playerworldmanager.listeners.WorldSessionListener
 import tech.bedson.playerworldmanager.managers.ChatManager
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.managers.WorldStateManager
+import tech.bedson.playerworldmanager.managers.WorldUnloadManager
 import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.io.File
 import java.nio.file.Paths
@@ -43,6 +45,7 @@ class PlayerWorldManager : JavaPlugin() {
     private lateinit var worldStateManager: WorldStateManager
     private lateinit var inviteManager: InviteManager
     private lateinit var chatManager: ChatManager
+    private lateinit var worldUnloadManager: WorldUnloadManager
     private var placeholderExpansion: PWMPlaceholderExpansion? = null
 
     // GUIs
@@ -78,6 +81,12 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("InviteManager created")
         chatManager = ChatManager(this, dataManager)
         debugLogger.debug("ChatManager created")
+        worldUnloadManager = WorldUnloadManager(this, worldManager, dataManager)
+        debugLogger.debug("WorldUnloadManager created")
+
+        // Set cross-references between managers
+        worldManager.setWorldUnloadManager(worldUnloadManager)
+        debugLogger.debug("WorldUnloadManager reference set in WorldManager")
 
         // Initialize GUIs
         debugLogger.debug("Initializing GUIs...")
@@ -98,6 +107,11 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("Initializing WorldManager (processing pending deletions and loading worlds)...")
         worldManager.initialize()
         debugLogger.debug("WorldManager initialized")
+
+        // Initialize world unload manager
+        debugLogger.debug("Initializing WorldUnloadManager...")
+        worldUnloadManager.initialize()
+        debugLogger.debug("WorldUnloadManager initialized")
 
         // Register Brigadier commands via LifecycleEventManager
         debugLogger.debug("Registering commands...")
@@ -167,6 +181,17 @@ class PlayerWorldManager : JavaPlugin() {
             debugLogger.debug("Unregistering PlaceholderAPI expansion...")
         }
         placeholderExpansion?.unregister()
+
+        // Shutdown world unload manager
+        if (::worldUnloadManager.isInitialized) {
+            if (::debugLogger.isInitialized) {
+                debugLogger.debug("Shutting down WorldUnloadManager...")
+            }
+            worldUnloadManager.shutdown()
+            if (::debugLogger.isInitialized) {
+                debugLogger.debug("WorldUnloadManager shutdown complete")
+            }
+        }
 
         // Save all data
         if (::dataManager.isInitialized) {
@@ -259,6 +284,11 @@ class PlayerWorldManager : JavaPlugin() {
         pluginManager.registerEvents(WorldSessionListener(this, worldManager, worldStateManager, dataManager), this)
         debugLogger.debug("WorldSessionListener registered")
 
+        // World change listener (tracks player entering/leaving worlds for auto-unload)
+        debugLogger.debug("Registering WorldChangeListener...")
+        pluginManager.registerEvents(WorldChangeListener(this, worldManager, worldUnloadManager), this)
+        debugLogger.debug("WorldChangeListener registered")
+
         logger.info("Listeners registered!")
         debugLogger.debugMethodExit("registerListeners")
     }
@@ -268,6 +298,7 @@ class PlayerWorldManager : JavaPlugin() {
     fun getWorldStateManager(): WorldStateManager = worldStateManager
     fun getInviteManager(): InviteManager = inviteManager
     fun getChatManager(): ChatManager = chatManager
+    fun getWorldUnloadManager(): WorldUnloadManager = worldUnloadManager
     fun getMainMenuGui(): MainMenuGui = mainMenuGui
     fun getAdminMenuGui(): AdminMenuGui = adminMenuGui
     fun getDebugLogger(): DebugLogger = debugLogger
