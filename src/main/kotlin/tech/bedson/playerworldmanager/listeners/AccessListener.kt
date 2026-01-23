@@ -3,6 +3,7 @@ package tech.bedson.playerworldmanager.listeners
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.Bukkit
+import org.bukkit.GameMode
 import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
@@ -13,6 +14,7 @@ import org.bukkit.event.player.PlayerTeleportEvent
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
+import tech.bedson.playerworldmanager.models.WorldRole
 import tech.bedson.playerworldmanager.utils.DebugLogger
 
 /**
@@ -119,6 +121,27 @@ class AccessListener(
             player.sendMessage(
                 Component.text("You don't have access to this world.", NamedTextColor.RED)
             )
+        } else {
+            // Handle visitor spectator mode
+            val role = inviteManager.getPlayerRole(player.uniqueId, playerWorld)
+            debugLogger.debug("Checking player role for teleport",
+                "player" to player.name,
+                "role" to role,
+                "isSpectatorOnly" to (role?.isSpectatorOnly() == true)
+            )
+
+            if (role?.isSpectatorOnly() == true) {
+                // Schedule gamemode change after teleport completes
+                player.scheduler.run(plugin, { _ ->
+                    if (player.gameMode != GameMode.SPECTATOR) {
+                        player.gameMode = GameMode.SPECTATOR
+                        player.sendMessage(
+                            Component.text("You are visiting this world as a spectator.", NamedTextColor.YELLOW)
+                        )
+                        plugin.logger.info("[AccessListener] PlayerTeleport: Set '${player.name}' to spectator mode as visitor in '${playerWorld.name}'")
+                    }
+                }, null)
+            }
         }
 
         debugLogger.debugMethodExit("onPlayerTeleport", "cancelled" to event.isCancelled)
@@ -326,6 +349,31 @@ class AccessListener(
                     "player" to player.name,
                     "reason" to "no default world available"
                 )
+            }
+        } else {
+            // Handle visitor spectator mode
+            val role = inviteManager.getPlayerRole(player.uniqueId, playerWorld)
+            debugLogger.debug("Checking player role for gamemode",
+                "player" to player.name,
+                "role" to role,
+                "isSpectatorOnly" to (role?.isSpectatorOnly() == true)
+            )
+
+            if (role?.isSpectatorOnly() == true) {
+                // Visitor - force spectator mode
+                player.scheduler.run(plugin, { _ ->
+                    if (player.gameMode != GameMode.SPECTATOR) {
+                        player.gameMode = GameMode.SPECTATOR
+                        player.sendMessage(
+                            Component.text("You are visiting this world as a spectator.", NamedTextColor.YELLOW)
+                        )
+                        plugin.logger.info("[AccessListener] PlayerChangedWorld: Set '${player.name}' to spectator mode as visitor in '${playerWorld.name}'")
+                        debugLogger.debug("Set visitor to spectator mode",
+                            "player" to player.name,
+                            "worldName" to playerWorld.name
+                        )
+                    }
+                }, null)
             }
         }
 
