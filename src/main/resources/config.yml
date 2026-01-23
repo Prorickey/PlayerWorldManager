@@ -31,3 +31,12 @@ worlds:
     # Delay in minutes before unloading an empty world (default: 5)
     # Set to -1 to disable auto-unloading
     delay-minutes: 5
+
+# Backup settings
+backups:
+  # Enable automatic scheduled backups globally
+  auto-backup-enabled: true
+  # Maximum number of backups to keep per world (oldest are deleted when limit is reached)
+  max-backups-per-world: 5
+  # Default interval for automatic backups in minutes (1440 = 24 hours)
+  default-interval-minutes: 1440

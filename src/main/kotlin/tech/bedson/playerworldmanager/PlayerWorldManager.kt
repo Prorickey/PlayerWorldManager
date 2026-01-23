@@ -19,6 +19,7 @@ import tech.bedson.playerworldmanager.listeners.ChatListener
 import tech.bedson.playerworldmanager.listeners.WorldChangeListener
 import tech.bedson.playerworldmanager.listeners.StatsListener
 import tech.bedson.playerworldmanager.listeners.WorldSessionListener
+import tech.bedson.playerworldmanager.managers.BackupManager
 import tech.bedson.playerworldmanager.managers.ChatManager
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
@@ -51,6 +52,7 @@ class PlayerWorldManager : JavaPlugin() {
     private lateinit var worldStateManager: WorldStateManager
     private lateinit var inviteManager: InviteManager
     private lateinit var chatManager: ChatManager
+    private lateinit var backupManager: BackupManager
     private lateinit var worldUnloadManager: WorldUnloadManager
     private lateinit var statsManager: StatsManager
     private var placeholderExpansion: PWMPlaceholderExpansion? = null
@@ -90,6 +92,8 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("InviteManager created")
         chatManager = ChatManager(this, dataManager)
         debugLogger.debug("ChatManager created")
+        backupManager = BackupManager(this, dataManager, worldManager)
+        debugLogger.debug("BackupManager created")
         worldUnloadManager = WorldUnloadManager(this, worldManager, dataManager)
         debugLogger.debug("WorldUnloadManager created")
 
@@ -129,6 +133,14 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("Initializing WorldManager (processing pending deletions and loading worlds)...")
         worldManager.initialize()
         debugLogger.debug("WorldManager initialized")
+
+        // Initialize backup manager
+        debugLogger.debug("Initializing BackupManager...")
+        backupManager.initialize()
+        debugLogger.debug("BackupManager initialized")
+
+        // Set backup manager on GUIs
+        mainMenuGui.setBackupManager(backupManager)
 
         // Initialize world unload manager
         debugLogger.debug("Initializing WorldUnloadManager...")
@@ -204,6 +216,14 @@ class PlayerWorldManager : JavaPlugin() {
         }
         placeholderExpansion?.unregister()
 
+        // Shutdown backup manager
+        if (::backupManager.isInitialized) {
+            if (::debugLogger.isInitialized) {
+                debugLogger.debug("Shutting down BackupManager...")
+            }
+            backupManager.shutdown()
+        }
+
         // Shutdown world unload manager
         if (::worldUnloadManager.isInitialized) {
             if (::debugLogger.isInitialized) {
@@ -254,7 +274,7 @@ class PlayerWorldManager : JavaPlugin() {
 
             // World command
             debugLogger.debug("Registering WorldCommands (/world, /w, /worlds)...")
-            val worldCommands = WorldCommands(this, worldManager, inviteManager, dataManager, mainMenuGui)
+            val worldCommands = WorldCommands(this, worldManager, inviteManager, dataManager, backupManager, mainMenuGui)
             registrar.register(
                 worldCommands.build(),
                 "Manage your personal worlds",
@@ -356,6 +376,7 @@ class PlayerWorldManager : JavaPlugin() {
     fun getWorldStateManager(): WorldStateManager = worldStateManager
     fun getInviteManager(): InviteManager = inviteManager
     fun getChatManager(): ChatManager = chatManager
+    fun getBackupManager(): BackupManager = backupManager
     fun getWorldUnloadManager(): WorldUnloadManager = worldUnloadManager
     fun getStatsManager(): StatsManager = statsManager
     fun getMainMenuGui(): MainMenuGui = mainMenuGui
