@@ -24,8 +24,14 @@ data class PlayerWorld(
     var timeLock: TimeLock = TimeLock.CYCLE,    // DAY, NIGHT, CYCLE
     var weatherLock: WeatherLock = WeatherLock.CYCLE,  // CLEAR, RAIN, CYCLE
     var isPublic: Boolean = false,         // Whether anyone can join the world
-    var publicJoinRole: WorldRole = WorldRole.VISITOR  // Role given to players who join via public access
+    var publicJoinRole: WorldRole = WorldRole.VISITOR,  // Role given to players who join via public access
+    private var _worldBorder: WorldBorderSettings? = null  // World border settings (nullable for Gson compatibility)
 ) {
+    // Public accessor that ensures a non-null WorldBorderSettings
+    var worldBorder: WorldBorderSettings
+        get() = _worldBorder ?: WorldBorderSettings.default().also { _worldBorder = it }
+        set(value) { _worldBorder = value }
+
     /**
      * Get the role of a player in this world.
      * Returns OWNER for the world owner, the stored role for other players,
@@ -124,6 +130,7 @@ data class PlayerWorld(
             }
         }
     }
+
     companion object {
         /**
          * Create a PlayerWorld with debug logging.
@@ -145,7 +152,8 @@ data class PlayerWorld(
             timeLock: TimeLock = TimeLock.CYCLE,
             weatherLock: WeatherLock = WeatherLock.CYCLE,
             isPublic: Boolean = false,
-            publicJoinRole: WorldRole = WorldRole.VISITOR
+            publicJoinRole: WorldRole = WorldRole.VISITOR,
+            worldBorder: WorldBorderSettings = WorldBorderSettings.default()
         ): PlayerWorld {
             val debugLogger = DebugLogger(plugin, "PlayerWorld")
             debugLogger.debug("Creating PlayerWorld",
@@ -161,7 +169,7 @@ data class PlayerWorld(
             return PlayerWorld(
                 id, name, ownerUuid, ownerName, worldType, seed, createdAt,
                 isEnabled, invitedPlayers, playerRoles, spawnLocation, defaultGameMode,
-                timeLock, weatherLock, isPublic, publicJoinRole
+                timeLock, weatherLock, isPublic, publicJoinRole, _worldBorder = worldBorder
             )
         }
     }
@@ -174,7 +182,8 @@ data class PlayerWorld(
                 "type=$worldType, seed=$seed, enabled=$isEnabled, " +
                 "members=${playerRoles.size}, gameMode=$defaultGameMode, " +
                 "timeLock=$timeLock, weatherLock=$weatherLock, " +
-                "isPublic=$isPublic, publicJoinRole=$publicJoinRole)"
+                "isPublic=$isPublic, publicJoinRole=$publicJoinRole, " +
+                "border=${worldBorder.size})"
     }
 
     /**
@@ -212,4 +221,23 @@ enum class WeatherLock {
     CLEAR,
     RAIN,
     CYCLE
+}
+
+/**
+ * Data class representing world border settings.
+ * Mirrors Minecraft's vanilla world border features.
+ */
+data class WorldBorderSettings(
+    var size: Double = 60000000.0,           // Border diameter in blocks (default: Minecraft default)
+    var centerX: Double = 0.0,               // Center X coordinate
+    var centerZ: Double = 0.0,               // Center Z coordinate
+    var damageAmount: Double = 0.2,          // Damage per block per second outside buffer
+    var damageBuffer: Double = 5.0,          // Distance past border before damage starts
+    var warningDistance: Int = 5,            // Warning distance in blocks
+    var warningTime: Int = 15                // Warning time in seconds
+) {
+    companion object {
+        /** Default world border settings */
+        fun default() = WorldBorderSettings()
+    }
 }

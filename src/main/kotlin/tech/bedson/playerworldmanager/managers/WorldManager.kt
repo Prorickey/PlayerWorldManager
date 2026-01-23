@@ -1258,8 +1258,56 @@ class WorldManager(
                 bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, true)
             }
         }
+
+        // Apply world border settings
+        applyWorldBorder(world, bukkitWorld)
+
         logger.info("[WorldManager] applyWorldSettings: Successfully applied settings to world '${world.name}'")
         debugLogger.debugMethodExit("applyWorldSettings", "success")
+    }
+
+    /**
+     * Apply world border settings to a Bukkit world.
+     *
+     * @param world The PlayerWorld containing border settings
+     * @param bukkitWorld The Bukkit world to apply border to (optional, will lookup if not provided)
+     */
+    fun applyWorldBorder(world: PlayerWorld, bukkitWorld: World? = null) {
+        debugLogger.debugMethodEntry("applyWorldBorder",
+            "worldName" to world.name,
+            "worldId" to world.id,
+            "borderSize" to world.worldBorder.size
+        )
+
+        val targetWorld = bukkitWorld ?: getBukkitWorld(world) ?: run {
+            logger.warning("[WorldManager] applyWorldBorder: Could not get Bukkit world for '${world.name}'")
+            debugLogger.debug("Cannot apply border - Bukkit world not found", "worldName" to world.name)
+            debugLogger.debugMethodExit("applyWorldBorder", "failed - no bukkit world")
+            return
+        }
+
+        val border = targetWorld.worldBorder
+        val settings = world.worldBorder
+
+        logger.info("[WorldManager] applyWorldBorder: Applying border to '${world.name}' - Size: ${settings.size}, Center: ${settings.centerX},${settings.centerZ}")
+
+        border.center = Location(targetWorld, settings.centerX, 0.0, settings.centerZ)
+        border.size = settings.size
+        border.damageAmount = settings.damageAmount
+        border.damageBuffer = settings.damageBuffer
+        border.warningDistance = settings.warningDistance
+        border.warningTime = settings.warningTime
+
+        debugLogger.debug("World border applied",
+            "size" to settings.size,
+            "centerX" to settings.centerX,
+            "centerZ" to settings.centerZ,
+            "damageAmount" to settings.damageAmount,
+            "damageBuffer" to settings.damageBuffer,
+            "warningDistance" to settings.warningDistance,
+            "warningTime" to settings.warningTime
+        )
+        debugLogger.debugMethodExit("applyWorldBorder", "success")
     }
 
     /**

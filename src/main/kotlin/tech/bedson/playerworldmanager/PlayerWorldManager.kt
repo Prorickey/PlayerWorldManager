@@ -8,9 +8,11 @@ import tech.bedson.playerworldmanager.commands.ChatCommands
 import tech.bedson.playerworldmanager.commands.StatsCommands
 import tech.bedson.playerworldmanager.commands.TestCommands
 import tech.bedson.playerworldmanager.commands.WorldAdminCommands
+import tech.bedson.playerworldmanager.commands.WorldBorderCommands
 import tech.bedson.playerworldmanager.commands.WorldCommands
 import tech.bedson.playerworldmanager.gui.AdminMenuGui
 import tech.bedson.playerworldmanager.gui.MainMenuGui
+import tech.bedson.playerworldmanager.gui.WorldBorderGui
 import tech.bedson.playerworldmanager.gui.WorldStatsGui
 import tech.bedson.playerworldmanager.listeners.AccessListener
 import tech.bedson.playerworldmanager.listeners.ChatListener
@@ -56,6 +58,7 @@ class PlayerWorldManager : JavaPlugin() {
     // GUIs
     private lateinit var mainMenuGui: MainMenuGui
     private lateinit var adminMenuGui: AdminMenuGui
+    private lateinit var worldBorderGui: WorldBorderGui
     private lateinit var worldStatsGui: WorldStatsGui
 
     override fun onEnable() {
@@ -102,6 +105,8 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("MainMenuGui created")
         adminMenuGui = AdminMenuGui(this, worldManager, inviteManager, dataManager)
         debugLogger.debug("AdminMenuGui created")
+        worldBorderGui = WorldBorderGui(this, worldManager, inviteManager, dataManager)
+        debugLogger.debug("WorldBorderGui created")
         worldStatsGui = WorldStatsGui(this, statsManager, worldManager, inviteManager, dataManager)
         debugLogger.debug("WorldStatsGui created")
 
@@ -207,10 +212,10 @@ class PlayerWorldManager : JavaPlugin() {
             worldUnloadManager.shutdown()
             if (::debugLogger.isInitialized) {
                 debugLogger.debug("WorldUnloadManager shutdown complete")
-                
+
             }
         }
-            
+
         // Save all statistics
         if (::statsManager.isInitialized) {
             if (::debugLogger.isInitialized) {
@@ -276,6 +281,16 @@ class PlayerWorldManager : JavaPlugin() {
                 listOf("wa", "wadmin")
             )
             debugLogger.debug("WorldAdminCommands registered")
+
+            // World border commands
+            debugLogger.debug("Registering WorldBorderCommands (/worldborder, /wb)...")
+            val worldBorderCommands = WorldBorderCommands(this, worldManager, dataManager, worldBorderGui)
+            registrar.register(
+                worldBorderCommands.build(),
+                "Manage world border settings",
+                listOf("wb")
+            )
+            debugLogger.debug("WorldBorderCommands registered")
 
             // Stats command
             debugLogger.debug("Registering StatsCommands (/stats, /worldstats)...")
@@ -345,6 +360,7 @@ class PlayerWorldManager : JavaPlugin() {
     fun getStatsManager(): StatsManager = statsManager
     fun getMainMenuGui(): MainMenuGui = mainMenuGui
     fun getAdminMenuGui(): AdminMenuGui = adminMenuGui
+    fun getWorldBorderGui(): WorldBorderGui = worldBorderGui
     fun getWorldStatsGui(): WorldStatsGui = worldStatsGui
     fun getDebugLogger(): DebugLogger = debugLogger
 }
