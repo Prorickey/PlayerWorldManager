@@ -7,6 +7,7 @@ import org.bukkit.entity.Player
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.models.PlayerWorld
 import tech.bedson.playerworldmanager.models.WorldInvite
+import tech.bedson.playerworldmanager.models.WorldRole
 import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.util.UUID
 
@@ -27,28 +28,39 @@ class InviteManager(
      * Send an invite to a player (creates pending invite).
      *
      * @param world The world to invite to
-     * @param inviter The player sending the invite (must be owner)
+     * @param inviter The player sending the invite (must be owner or manager)
      * @param invitee The player being invited
+     * @param role The role to assign to the invitee (default: MEMBER)
      * @return Result with success or error message
      */
-    fun sendInvite(world: PlayerWorld, inviter: Player, invitee: Player): Result<Unit> {
+    fun sendInvite(world: PlayerWorld, inviter: Player, invitee: Player, role: WorldRole = WorldRole.MEMBER): Result<Unit> {
         debugLogger.debugMethodEntry("sendInvite",
             "worldName" to world.name,
             "worldId" to world.id,
             "inviterName" to inviter.name,
             "inviterUuid" to inviter.uniqueId,
             "inviteeName" to invitee.name,
-            "inviteeUuid" to invitee.uniqueId
+            "inviteeUuid" to invitee.uniqueId,
+            "assignedRole" to role
         )
-        plugin.logger.info("[InviteManager] sendInvite: Player '${inviter.name}' attempting to invite '${invitee.name}' to world '${world.name}'")
+        plugin.logger.info("[InviteManager] sendInvite: Player '${inviter.name}' attempting to invite '${invitee.name}' to world '${world.name}' with role '$role'")
 
-        // Verify inviter is the owner
-        debugLogger.debug("Verifying inviter is owner", "worldOwnerUuid" to world.ownerUuid, "inviterUuid" to inviter.uniqueId)
-        if (world.ownerUuid != inviter.uniqueId) {
-            plugin.logger.warning("[InviteManager] sendInvite: Player '${inviter.name}' is not the owner of world '${world.name}'")
-            debugLogger.debug("Invite rejected - inviter is not owner")
-            debugLogger.debugMethodExit("sendInvite", "failure: not owner")
-            return Result.failure(IllegalArgumentException("You don't own this world"))
+        // Verify inviter has permission to invite
+        val inviterRole = world.getPlayerRole(inviter.uniqueId)
+        debugLogger.debug("Verifying inviter has invite permission", "inviterRole" to inviterRole)
+        if (inviterRole == null || !inviterRole.canInvite()) {
+            plugin.logger.warning("[InviteManager] sendInvite: Player '${inviter.name}' does not have permission to invite in world '${world.name}'")
+            debugLogger.debug("Invite rejected - inviter lacks permission")
+            debugLogger.debugMethodExit("sendInvite", "failure: no permission")
+            return Result.failure(IllegalArgumentException("You don't have permission to invite players to this world"))
+        }
+
+        // Managers can only invite as MEMBER or VISITOR, not MANAGER
+        if (inviterRole == WorldRole.MANAGER && role == WorldRole.MANAGER) {
+            plugin.logger.warning("[InviteManager] sendInvite: Manager '${inviter.name}' attempted to invite as MANAGER")
+            debugLogger.debug("Invite rejected - managers cannot invite as manager")
+            debugLogger.debugMethodExit("sendInvite", "failure: cannot invite as manager")
+            return Result.failure(IllegalArgumentException("Only the owner can invite players as managers"))
         }
 
         // Check if invitee is already the owner
@@ -59,13 +71,13 @@ class InviteManager(
             return Result.failure(IllegalArgumentException("You cannot invite yourself to your own world"))
         }
 
-        // Check if invitee is already invited
-        debugLogger.debug("Checking if invitee is already invited", "invitedPlayersCount" to world.invitedPlayers.size)
-        if (world.invitedPlayers.contains(invitee.uniqueId)) {
-            plugin.logger.warning("[InviteManager] sendInvite: Player '${invitee.name}' is already invited to world '${world.name}'")
-            debugLogger.debug("Invite rejected - already invited")
-            debugLogger.debugMethodExit("sendInvite", "failure: already invited")
-            return Result.failure(IllegalArgumentException("${invitee.name} is already invited to this world"))
+        // Check if invitee already has explicit access
+        debugLogger.debug("Checking if invitee already has access", "playerRolesCount" to world.playerRoles.size)
+        if (world.hasExplicitAccess(invitee.uniqueId)) {
+            plugin.logger.warning("[InviteManager] sendInvite: Player '${invitee.name}' already has access to world '${world.name}'")
+            debugLogger.debug("Invite rejected - already has access")
+            debugLogger.debugMethodExit("sendInvite", "failure: already has access")
+            return Result.failure(IllegalArgumentException("${invitee.name} already has access to this world"))
         }
 
         // Check if there's already a pending invite
@@ -79,20 +91,22 @@ class InviteManager(
         }
 
         // Create invite
-        debugLogger.debug("Creating new invite")
+        debugLogger.debug("Creating new invite with role", "role" to role)
         val invite = WorldInvite(
             worldId = world.id,
             worldName = world.name,
-            ownerUuid = world.ownerUuid,
-            ownerName = world.ownerName,
+            ownerUuid = inviter.uniqueId,  // The actual inviter, not necessarily the owner
+            ownerName = inviter.name,
             inviteeUuid = invitee.uniqueId,
             inviteeName = invitee.name,
-            sentAt = System.currentTimeMillis()
+            sentAt = System.currentTimeMillis(),
+            assignedRole = role
         )
         debugLogger.debugState("newInvite",
             "worldId" to invite.worldId,
             "inviteeUuid" to invite.inviteeUuid,
-            "sentAt" to invite.sentAt
+            "sentAt" to invite.sentAt,
+            "assignedRole" to invite.assignedRole
         )
 
         // Save invite
@@ -107,10 +121,17 @@ class InviteManager(
                 .append(Component.text(world.name, NamedTextColor.GOLD))
         )
 
+        val roleText = when (role) {
+            WorldRole.MANAGER -> " as a manager"
+            WorldRole.MEMBER -> ""
+            WorldRole.VISITOR -> " as a visitor"
+            else -> ""
+        }
         invitee.sendMessage(
             Component.text(inviter.name, NamedTextColor.GOLD)
-                .append(Component.text(" has invited you to their world ", NamedTextColor.YELLOW))
+                .append(Component.text(" has invited you to the world ", NamedTextColor.YELLOW))
                 .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(roleText, NamedTextColor.YELLOW))
                 .append(Component.text("!", NamedTextColor.YELLOW))
         )
         invitee.sendMessage(
@@ -161,22 +182,28 @@ class InviteManager(
         }
         debugLogger.debug("World loaded successfully", "worldName" to world.name)
 
-        // Add player to invited players
-        debugLogger.debug("Adding player to invited players list", "previousCount" to world.invitedPlayers.size)
-        world.invitedPlayers.add(player.uniqueId)
+        // Add player with their assigned role
+        val assignedRole = invite.assignedRole
+        debugLogger.debug("Adding player with role", "previousCount" to world.playerRoles.size, "assignedRole" to assignedRole)
+        world.setPlayerRole(player.uniqueId, assignedRole)
         dataManager.saveWorld(world)
-        plugin.logger.info("[InviteManager] acceptInvite: Added player '${player.name}' to invited players list for world '${world.name}'")
-        debugLogger.debug("Player added to invited list", "newCount" to world.invitedPlayers.size)
+        plugin.logger.info("[InviteManager] acceptInvite: Added player '${player.name}' to world '${world.name}' with role '$assignedRole'")
+        debugLogger.debug("Player added with role", "newCount" to world.playerRoles.size, "role" to assignedRole)
 
         // Remove the pending invite
         debugLogger.debug("Removing pending invite")
         dataManager.removeInvite(invite)
 
         // Notify the player
+        val roleDescription = when (assignedRole) {
+            WorldRole.MANAGER -> " You are a manager."
+            WorldRole.VISITOR -> " You are a visitor (spectator mode)."
+            else -> ""
+        }
         player.sendMessage(
             Component.text("You have accepted the invite to ", NamedTextColor.GREEN)
                 .append(Component.text(world.name, NamedTextColor.GOLD))
-                .append(Component.text("!", NamedTextColor.GREEN))
+                .append(Component.text("!$roleDescription", NamedTextColor.GREEN))
         )
 
         // Notify the owner if online
@@ -295,59 +322,77 @@ class InviteManager(
     }
 
     /**
-     * Kick an invited player from a world (removes their access).
+     * Kick a player from a world (removes their access).
      *
      * @param world The world to kick from
-     * @param owner The player kicking (must be owner)
+     * @param kicker The player kicking (must be owner or manager)
      * @param playerToKick The UUID of the player to kick
      * @return Result with success or error message
      */
-    fun kickPlayer(world: PlayerWorld, owner: Player, playerToKick: UUID): Result<Unit> {
+    fun kickPlayer(world: PlayerWorld, kicker: Player, playerToKick: UUID): Result<Unit> {
         debugLogger.debugMethodEntry("kickPlayer",
             "worldName" to world.name,
             "worldId" to world.id,
-            "ownerName" to owner.name,
-            "ownerUuid" to owner.uniqueId,
+            "kickerName" to kicker.name,
+            "kickerUuid" to kicker.uniqueId,
             "playerToKickUuid" to playerToKick
         )
-        plugin.logger.info("[InviteManager] kickPlayer: Owner '${owner.name}' attempting to kick player UUID '$playerToKick' from world '${world.name}'")
+        plugin.logger.info("[InviteManager] kickPlayer: Player '${kicker.name}' attempting to kick player UUID '$playerToKick' from world '${world.name}'")
 
-        // Verify owner
-        debugLogger.debug("Verifying caller is owner", "worldOwnerUuid" to world.ownerUuid, "callerUuid" to owner.uniqueId)
-        if (world.ownerUuid != owner.uniqueId) {
-            plugin.logger.warning("[InviteManager] kickPlayer: Player '${owner.name}' is not the owner of world '${world.name}'")
-            debugLogger.debug("Kick rejected - caller is not owner")
-            debugLogger.debugMethodExit("kickPlayer", "failure: not owner")
-            return Result.failure(IllegalArgumentException("You don't own this world"))
+        // Verify kicker has permission to kick
+        val kickerRole = world.getPlayerRole(kicker.uniqueId)
+        debugLogger.debug("Verifying caller has kick permission", "kickerRole" to kickerRole)
+        if (kickerRole == null || !kickerRole.canKick()) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Player '${kicker.name}' does not have permission to kick in world '${world.name}'")
+            debugLogger.debug("Kick rejected - caller lacks permission")
+            debugLogger.debugMethodExit("kickPlayer", "failure: no permission")
+            return Result.failure(IllegalArgumentException("You don't have permission to kick players from this world"))
         }
 
-        // Check if player is the owner
-        if (playerToKick == owner.uniqueId) {
-            plugin.logger.warning("[InviteManager] kickPlayer: Owner '${owner.name}' attempted to kick themselves from world '${world.name}'")
+        // Check if player is trying to kick themselves
+        if (playerToKick == kicker.uniqueId) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Player '${kicker.name}' attempted to kick themselves from world '${world.name}'")
             debugLogger.debug("Kick rejected - cannot kick self")
             debugLogger.debugMethodExit("kickPlayer", "failure: self kick")
-            return Result.failure(IllegalArgumentException("You cannot kick yourself from your own world"))
+            return Result.failure(IllegalArgumentException("You cannot kick yourself from the world"))
         }
 
-        // Check if player is invited
-        debugLogger.debug("Checking if player is in invited list", "invitedPlayersCount" to world.invitedPlayers.size)
-        if (!world.invitedPlayers.contains(playerToKick)) {
-            plugin.logger.warning("[InviteManager] kickPlayer: Player UUID '$playerToKick' is not invited to world '${world.name}'")
-            debugLogger.debug("Kick rejected - player not invited")
-            debugLogger.debugMethodExit("kickPlayer", "failure: not invited")
-            return Result.failure(IllegalArgumentException("This player is not invited to your world"))
+        // Check if player has access to the world
+        val playerRole = world.getExplicitPlayerRole(playerToKick)
+        debugLogger.debug("Checking target player's role", "playerRole" to playerRole)
+        if (playerRole == null) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Player UUID '$playerToKick' does not have access to world '${world.name}'")
+            debugLogger.debug("Kick rejected - player has no access")
+            debugLogger.debugMethodExit("kickPlayer", "failure: no access")
+            return Result.failure(IllegalArgumentException("This player does not have access to this world"))
+        }
+
+        // Cannot kick the owner
+        if (playerRole == WorldRole.OWNER) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Cannot kick owner from world '${world.name}'")
+            debugLogger.debug("Kick rejected - cannot kick owner")
+            debugLogger.debugMethodExit("kickPlayer", "failure: cannot kick owner")
+            return Result.failure(IllegalArgumentException("Cannot kick the world owner"))
+        }
+
+        // Managers cannot kick other managers
+        if (kickerRole == WorldRole.MANAGER && playerRole == WorldRole.MANAGER) {
+            plugin.logger.warning("[InviteManager] kickPlayer: Manager '${kicker.name}' attempted to kick another manager from world '${world.name}'")
+            debugLogger.debug("Kick rejected - managers cannot kick other managers")
+            debugLogger.debugMethodExit("kickPlayer", "failure: cannot kick manager")
+            return Result.failure(IllegalArgumentException("Managers cannot kick other managers"))
         }
 
         // Get the kicked player's name for messaging
         val kickedPlayerName = Bukkit.getOfflinePlayer(playerToKick).name ?: playerToKick.toString()
         plugin.logger.info("[InviteManager] kickPlayer: Kicking player '$kickedPlayerName' from world '${world.name}'")
 
-        // Remove from invited players
-        debugLogger.debug("Removing player from invited list", "previousCount" to world.invitedPlayers.size)
-        world.invitedPlayers.remove(playerToKick)
+        // Remove player's access
+        debugLogger.debug("Removing player's access", "previousCount" to world.playerRoles.size)
+        world.removePlayer(playerToKick)
         dataManager.saveWorld(world)
-        plugin.logger.info("[InviteManager] kickPlayer: Removed player '$kickedPlayerName' from invited players list for world '${world.name}'")
-        debugLogger.debug("Player removed from invited list", "newCount" to world.invitedPlayers.size)
+        plugin.logger.info("[InviteManager] kickPlayer: Removed player '$kickedPlayerName' from world '${world.name}'")
+        debugLogger.debug("Player removed", "newCount" to world.playerRoles.size)
 
         // If player is currently in the world, teleport them out
         val kickedPlayer = Bukkit.getPlayer(playerToKick)
@@ -382,8 +427,8 @@ class InviteManager(
             plugin.logger.info("[InviteManager] kickPlayer: Player '$kickedPlayerName' is offline, no teleport needed")
         }
 
-        // Notify owner
-        owner.sendMessage(
+        // Notify kicker
+        kicker.sendMessage(
             Component.text("Kicked ", NamedTextColor.GREEN)
                 .append(Component.text(kickedPlayerName, NamedTextColor.GOLD))
                 .append(Component.text(" from ", NamedTextColor.GREEN))
@@ -424,49 +469,246 @@ class InviteManager(
     }
 
     /**
-     * Check if player is invited to a world.
+     * Check if player has explicit access to a world (not via public).
      *
      * @param playerUuid The player's UUID
      * @param world The world to check
-     * @return True if player is in the invited players list
+     * @return True if player has explicit access (owner, manager, member, or visitor role)
      */
-    fun isInvited(playerUuid: UUID, world: PlayerWorld): Boolean {
-        debugLogger.debugMethodEntry("isInvited", "playerUuid" to playerUuid, "worldName" to world.name)
-        val isInvited = world.invitedPlayers.contains(playerUuid)
-        debugLogger.debugMethodExit("isInvited", isInvited)
-        return isInvited
+    fun hasExplicitAccess(playerUuid: UUID, world: PlayerWorld): Boolean {
+        debugLogger.debugMethodEntry("hasExplicitAccess", "playerUuid" to playerUuid, "worldName" to world.name)
+        val hasAccess = world.hasExplicitAccess(playerUuid)
+        debugLogger.debugMethodExit("hasExplicitAccess", hasAccess)
+        return hasAccess
     }
 
     /**
-     * Check if player has access to a world (owner OR invited).
+     * Check if player has access to a world (owner, invited, or via public access).
      *
      * @param playerUuid The player's UUID
      * @param world The world to check
-     * @return True if player is owner or invited
+     * @return True if player has access
      */
     fun hasAccess(playerUuid: UUID, world: PlayerWorld): Boolean {
         debugLogger.debugMethodEntry("hasAccess", "playerUuid" to playerUuid, "worldName" to world.name, "worldId" to world.id)
-        val isOwner = world.ownerUuid == playerUuid
-        val isInvited = world.invitedPlayers.contains(playerUuid)
-        val hasAccess = isOwner || isInvited
-        plugin.logger.info("[InviteManager] hasAccess: Checking access for player UUID '$playerUuid' to world '${world.name}' - Owner: $isOwner, Invited: $isInvited, Result: $hasAccess")
-        debugLogger.debug("Access check result", "isOwner" to isOwner, "isInvited" to isInvited, "hasAccess" to hasAccess)
+        val role = world.getPlayerRole(playerUuid)
+        val hasAccess = role != null
+        plugin.logger.info("[InviteManager] hasAccess: Checking access for player UUID '$playerUuid' to world '${world.name}' - Role: $role, Result: $hasAccess")
+        debugLogger.debug("Access check result", "role" to role, "hasAccess" to hasAccess)
         debugLogger.debugMethodExit("hasAccess", hasAccess)
         return hasAccess
     }
 
     /**
-     * Get all players invited to a world.
+     * Get the role of a player in a world.
+     *
+     * @param playerUuid The player's UUID
+     * @param world The world to check
+     * @return The player's role, or null if no access
+     */
+    fun getPlayerRole(playerUuid: UUID, world: PlayerWorld): WorldRole? {
+        debugLogger.debugMethodEntry("getPlayerRole", "playerUuid" to playerUuid, "worldName" to world.name)
+        val role = world.getPlayerRole(playerUuid)
+        debugLogger.debugMethodExit("getPlayerRole", role)
+        return role
+    }
+
+    /**
+     * Get all players with access to a world (excluding owner).
      *
      * @param world The world
-     * @return Set of invited player UUIDs
+     * @return Set of player UUIDs with access
      */
-    fun getInvitedPlayers(world: PlayerWorld): Set<UUID> {
-        debugLogger.debugMethodEntry("getInvitedPlayers", "worldName" to world.name)
-        val players = world.invitedPlayers.toSet()
-        debugLogger.debug("Retrieved invited players", "count" to players.size)
-        debugLogger.debugMethodExit("getInvitedPlayers", players.size)
+    fun getPlayersWithAccess(world: PlayerWorld): Set<UUID> {
+        debugLogger.debugMethodEntry("getPlayersWithAccess", "worldName" to world.name)
+        val players = world.playerRoles.keys.toSet()
+        debugLogger.debug("Retrieved players with access", "count" to players.size)
+        debugLogger.debugMethodExit("getPlayersWithAccess", players.size)
         return players
+    }
+
+    /**
+     * Get all players with a specific role in a world.
+     *
+     * @param world The world
+     * @param role The role to filter by
+     * @return Set of player UUIDs with the specified role
+     */
+    fun getPlayersWithRole(world: PlayerWorld, role: WorldRole): Set<UUID> {
+        debugLogger.debugMethodEntry("getPlayersWithRole", "worldName" to world.name, "role" to role)
+        val players = world.getPlayersWithRole(role)
+        debugLogger.debug("Retrieved players with role", "count" to players.size)
+        debugLogger.debugMethodExit("getPlayersWithRole", players.size)
+        return players
+    }
+
+    /**
+     * Set or change a player's role in a world.
+     * Only the owner can change roles.
+     *
+     * @param world The world
+     * @param owner The player making the change (must be owner)
+     * @param targetUuid The UUID of the player whose role is being changed
+     * @param newRole The new role to assign
+     * @return Result with success or error message
+     */
+    fun setPlayerRole(world: PlayerWorld, owner: Player, targetUuid: UUID, newRole: WorldRole): Result<Unit> {
+        debugLogger.debugMethodEntry("setPlayerRole",
+            "worldName" to world.name,
+            "ownerName" to owner.name,
+            "targetUuid" to targetUuid,
+            "newRole" to newRole
+        )
+        plugin.logger.info("[InviteManager] setPlayerRole: Player '${owner.name}' attempting to set role '$newRole' for UUID '$targetUuid' in world '${world.name}'")
+
+        // Verify caller is the owner
+        if (world.ownerUuid != owner.uniqueId) {
+            plugin.logger.warning("[InviteManager] setPlayerRole: Player '${owner.name}' is not the owner of world '${world.name}'")
+            debugLogger.debugMethodExit("setPlayerRole", "failure: not owner")
+            return Result.failure(IllegalArgumentException("Only the owner can change player roles"))
+        }
+
+        // Cannot change owner role
+        if (newRole == WorldRole.OWNER) {
+            plugin.logger.warning("[InviteManager] setPlayerRole: Cannot set OWNER role directly")
+            debugLogger.debugMethodExit("setPlayerRole", "failure: cannot set owner")
+            return Result.failure(IllegalArgumentException("Cannot set OWNER role. Use transfer ownership instead."))
+        }
+
+        // Cannot change own role
+        if (targetUuid == owner.uniqueId) {
+            plugin.logger.warning("[InviteManager] setPlayerRole: Owner attempted to change their own role")
+            debugLogger.debugMethodExit("setPlayerRole", "failure: self modification")
+            return Result.failure(IllegalArgumentException("You cannot change your own role"))
+        }
+
+        // Check if target has access
+        if (!world.hasExplicitAccess(targetUuid)) {
+            plugin.logger.warning("[InviteManager] setPlayerRole: Target UUID '$targetUuid' does not have access to world '${world.name}'")
+            debugLogger.debugMethodExit("setPlayerRole", "failure: no access")
+            return Result.failure(IllegalArgumentException("This player does not have access to the world"))
+        }
+
+        // Set the role
+        val targetName = Bukkit.getOfflinePlayer(targetUuid).name ?: targetUuid.toString()
+        val previousRole = world.getPlayerRole(targetUuid)
+        world.setPlayerRole(targetUuid, newRole)
+        dataManager.saveWorld(world)
+        plugin.logger.info("[InviteManager] setPlayerRole: Changed role for '$targetName' from '$previousRole' to '$newRole' in world '${world.name}'")
+
+        // Notify owner
+        owner.sendMessage(
+            Component.text("Changed ", NamedTextColor.GREEN)
+                .append(Component.text(targetName, NamedTextColor.GOLD))
+                .append(Component.text("'s role to ", NamedTextColor.GREEN))
+                .append(Component.text(newRole.name.lowercase().replaceFirstChar { it.uppercase() }, NamedTextColor.GOLD))
+        )
+
+        // Notify target if online
+        val targetPlayer = Bukkit.getPlayer(targetUuid)
+        if (targetPlayer != null) {
+            val roleMessage = when (newRole) {
+                WorldRole.MANAGER -> "You are now a manager of "
+                WorldRole.MEMBER -> "You are now a member of "
+                WorldRole.VISITOR -> "You are now a visitor in "
+                else -> "Your role has changed in "
+            }
+            targetPlayer.sendMessage(
+                Component.text(roleMessage, NamedTextColor.YELLOW)
+                    .append(Component.text(world.name, NamedTextColor.GOLD))
+            )
+        }
+
+        debugLogger.debugMethodExit("setPlayerRole", "success")
+        return Result.success(Unit)
+    }
+
+    /**
+     * Toggle a world's public/private visibility.
+     * Only the owner can change visibility.
+     *
+     * @param world The world
+     * @param owner The player making the change (must be owner)
+     * @return Result with the new visibility state
+     */
+    fun toggleWorldVisibility(world: PlayerWorld, owner: Player): Result<Boolean> {
+        debugLogger.debugMethodEntry("toggleWorldVisibility",
+            "worldName" to world.name,
+            "ownerName" to owner.name,
+            "currentVisibility" to world.isPublic
+        )
+
+        // Verify caller is the owner
+        if (world.ownerUuid != owner.uniqueId) {
+            plugin.logger.warning("[InviteManager] toggleWorldVisibility: Player '${owner.name}' is not the owner of world '${world.name}'")
+            debugLogger.debugMethodExit("toggleWorldVisibility", "failure: not owner")
+            return Result.failure(IllegalArgumentException("Only the owner can change world visibility"))
+        }
+
+        // Toggle visibility
+        world.isPublic = !world.isPublic
+        dataManager.saveWorld(world)
+        plugin.logger.info("[InviteManager] toggleWorldVisibility: World '${world.name}' is now ${if (world.isPublic) "public" else "private"}")
+
+        // Notify owner
+        val visibilityText = if (world.isPublic) "public" else "private"
+        owner.sendMessage(
+            Component.text("World ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(" is now ", NamedTextColor.GREEN))
+                .append(Component.text(visibilityText, NamedTextColor.GOLD))
+        )
+
+        debugLogger.debugMethodExit("toggleWorldVisibility", world.isPublic)
+        return Result.success(world.isPublic)
+    }
+
+    /**
+     * Set the role that players get when joining a public world.
+     * Only the owner can change this setting.
+     *
+     * @param world The world
+     * @param owner The player making the change (must be owner)
+     * @param role The role to assign to public joiners (MEMBER or VISITOR)
+     * @return Result with success or error message
+     */
+    fun setPublicJoinRole(world: PlayerWorld, owner: Player, role: WorldRole): Result<Unit> {
+        debugLogger.debugMethodEntry("setPublicJoinRole",
+            "worldName" to world.name,
+            "ownerName" to owner.name,
+            "role" to role
+        )
+
+        // Verify caller is the owner
+        if (world.ownerUuid != owner.uniqueId) {
+            plugin.logger.warning("[InviteManager] setPublicJoinRole: Player '${owner.name}' is not the owner of world '${world.name}'")
+            debugLogger.debugMethodExit("setPublicJoinRole", "failure: not owner")
+            return Result.failure(IllegalArgumentException("Only the owner can change public join settings"))
+        }
+
+        // Only allow MEMBER or VISITOR for public join role
+        if (role != WorldRole.MEMBER && role != WorldRole.VISITOR) {
+            plugin.logger.warning("[InviteManager] setPublicJoinRole: Invalid role '$role' for public join")
+            debugLogger.debugMethodExit("setPublicJoinRole", "failure: invalid role")
+            return Result.failure(IllegalArgumentException("Public join role must be Member or Visitor"))
+        }
+
+        // Set the role
+        world.publicJoinRole = role
+        dataManager.saveWorld(world)
+        plugin.logger.info("[InviteManager] setPublicJoinRole: World '${world.name}' public join role set to '$role'")
+
+        // Notify owner
+        val roleText = if (role == WorldRole.MEMBER) "Member (can play)" else "Visitor (spectator only)"
+        owner.sendMessage(
+            Component.text("Players joining ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(" publicly will be: ", NamedTextColor.GREEN))
+                .append(Component.text(roleText, NamedTextColor.GOLD))
+        )
+
+        debugLogger.debugMethodExit("setPublicJoinRole", "success")
+        return Result.success(Unit)
     }
 
     /**
@@ -504,13 +746,13 @@ class InviteManager(
             return Result.failure(IllegalArgumentException("You already own this world"))
         }
 
-        // Check if new owner is invited
-        debugLogger.debug("Checking if new owner is invited", "invitedPlayersCount" to world.invitedPlayers.size)
-        if (!world.invitedPlayers.contains(newOwnerUuid)) {
-            plugin.logger.warning("[InviteManager] transferOwnership: New owner UUID '$newOwnerUuid' is not invited to world '${world.name}'")
-            debugLogger.debug("Transfer rejected - new owner not invited")
-            debugLogger.debugMethodExit("transferOwnership", "failure: not invited")
-            return Result.failure(IllegalArgumentException("The new owner must be invited to the world first"))
+        // Check if new owner has access to the world
+        debugLogger.debug("Checking if new owner has access", "playerRolesCount" to world.playerRoles.size)
+        if (!world.hasExplicitAccess(newOwnerUuid)) {
+            plugin.logger.warning("[InviteManager] transferOwnership: New owner UUID '$newOwnerUuid' does not have access to world '${world.name}'")
+            debugLogger.debug("Transfer rejected - new owner has no access")
+            debugLogger.debugMethodExit("transferOwnership", "failure: no access")
+            return Result.failure(IllegalArgumentException("The new owner must have access to the world first"))
         }
 
         // Get new owner's name
@@ -543,14 +785,16 @@ class InviteManager(
         )
         debugLogger.debug("Created updated world with new owner")
 
-        // Remove new owner from invited players
+        // Remove new owner from player roles (they're now the owner)
+        updatedWorld.playerRoles.remove(newOwnerUuid)
         updatedWorld.invitedPlayers.remove(newOwnerUuid)
-        plugin.logger.info("[InviteManager] transferOwnership: Removed new owner '$newOwnerName' from invited players list")
+        plugin.logger.info("[InviteManager] transferOwnership: Removed new owner '$newOwnerName' from player roles")
 
-        // Add old owner to invited players
+        // Add old owner as a manager (they still have management access)
+        updatedWorld.playerRoles[oldOwnerUuid] = WorldRole.MANAGER
         updatedWorld.invitedPlayers.add(oldOwnerUuid)
-        plugin.logger.info("[InviteManager] transferOwnership: Added old owner '$oldOwnerName' to invited players list")
-        debugLogger.debug("Updated invited players list", "count" to updatedWorld.invitedPlayers.size)
+        plugin.logger.info("[InviteManager] transferOwnership: Added old owner '$oldOwnerName' as manager")
+        debugLogger.debug("Updated player roles", "count" to updatedWorld.playerRoles.size)
 
         // Save updated world
         debugLogger.debug("Saving updated world")
