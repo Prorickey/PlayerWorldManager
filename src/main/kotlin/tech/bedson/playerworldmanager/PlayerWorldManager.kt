@@ -5,18 +5,22 @@ import org.bukkit.Bukkit
 import org.bukkit.craftbukkit.CraftServer
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.commands.ChatCommands
+import tech.bedson.playerworldmanager.commands.StatsCommands
 import tech.bedson.playerworldmanager.commands.TestCommands
 import tech.bedson.playerworldmanager.commands.WorldAdminCommands
 import tech.bedson.playerworldmanager.commands.WorldCommands
 import tech.bedson.playerworldmanager.gui.AdminMenuGui
 import tech.bedson.playerworldmanager.gui.MainMenuGui
+import tech.bedson.playerworldmanager.gui.WorldStatsGui
 import tech.bedson.playerworldmanager.listeners.AccessListener
 import tech.bedson.playerworldmanager.listeners.ChatListener
 import tech.bedson.playerworldmanager.listeners.WorldChangeListener
+import tech.bedson.playerworldmanager.listeners.StatsListener
 import tech.bedson.playerworldmanager.listeners.WorldSessionListener
 import tech.bedson.playerworldmanager.managers.ChatManager
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
+import tech.bedson.playerworldmanager.managers.StatsManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.managers.WorldStateManager
 import tech.bedson.playerworldmanager.managers.WorldUnloadManager
@@ -46,11 +50,13 @@ class PlayerWorldManager : JavaPlugin() {
     private lateinit var inviteManager: InviteManager
     private lateinit var chatManager: ChatManager
     private lateinit var worldUnloadManager: WorldUnloadManager
+    private lateinit var statsManager: StatsManager
     private var placeholderExpansion: PWMPlaceholderExpansion? = null
 
     // GUIs
     private lateinit var mainMenuGui: MainMenuGui
     private lateinit var adminMenuGui: AdminMenuGui
+    private lateinit var worldStatsGui: WorldStatsGui
 
     override fun onEnable() {
         instance = this
@@ -87,13 +93,17 @@ class PlayerWorldManager : JavaPlugin() {
         // Set cross-references between managers
         worldManager.setWorldUnloadManager(worldUnloadManager)
         debugLogger.debug("WorldUnloadManager reference set in WorldManager")
+        statsManager = StatsManager(this, dataManager, worldManager)
+        debugLogger.debug("StatsManager created")
 
         // Initialize GUIs
         debugLogger.debug("Initializing GUIs...")
-        mainMenuGui = MainMenuGui(this, worldManager, inviteManager, dataManager)
+        mainMenuGui = MainMenuGui(this, worldManager, inviteManager, dataManager, statsManager)
         debugLogger.debug("MainMenuGui created")
         adminMenuGui = AdminMenuGui(this, worldManager, inviteManager, dataManager)
         debugLogger.debug("AdminMenuGui created")
+        worldStatsGui = WorldStatsGui(this, statsManager, worldManager, inviteManager, dataManager)
+        debugLogger.debug("WorldStatsGui created")
 
         // Load data
         debugLogger.debug("Loading data from disk...")
@@ -101,6 +111,13 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("Data loaded",
             "worlds" to dataManager.getAllWorlds().size,
             "players" to dataManager.getAllPlayerData().size
+        )
+
+        // Load statistics
+        debugLogger.debug("Loading statistics from disk...")
+        statsManager.loadAll()
+        debugLogger.debug("Statistics loaded",
+            "worldStats" to statsManager.getAllWorldStats().size
         )
 
         // Initialize world manager (processes pending deletions and loads worlds)
@@ -190,6 +207,18 @@ class PlayerWorldManager : JavaPlugin() {
             worldUnloadManager.shutdown()
             if (::debugLogger.isInitialized) {
                 debugLogger.debug("WorldUnloadManager shutdown complete")
+                
+            }
+        }
+            
+        // Save all statistics
+        if (::statsManager.isInitialized) {
+            if (::debugLogger.isInitialized) {
+                debugLogger.debug("Saving all statistics to disk...")
+            }
+            statsManager.saveAll()
+            if (::debugLogger.isInitialized) {
+                debugLogger.debug("Statistics saved")
             }
         }
 
@@ -248,6 +277,16 @@ class PlayerWorldManager : JavaPlugin() {
             )
             debugLogger.debug("WorldAdminCommands registered")
 
+            // Stats command
+            debugLogger.debug("Registering StatsCommands (/stats, /worldstats)...")
+            val statsCommands = StatsCommands(this, statsManager, worldManager, dataManager, worldStatsGui)
+            registrar.register(
+                statsCommands.build(),
+                "View world statistics",
+                listOf("worldstats")
+            )
+            debugLogger.debug("StatsCommands registered")
+
             // Console test commands (for LLM/automated testing)
             debugLogger.debug("Registering TestCommands (/pwmtest, /pwmt)...")
             val testCommands = TestCommands(this, worldManager, inviteManager, dataManager)
@@ -288,6 +327,10 @@ class PlayerWorldManager : JavaPlugin() {
         debugLogger.debug("Registering WorldChangeListener...")
         pluginManager.registerEvents(WorldChangeListener(this, worldManager, worldUnloadManager), this)
         debugLogger.debug("WorldChangeListener registered")
+        // Statistics listener (tracks blocks, kills, deaths, etc.)
+        debugLogger.debug("Registering StatsListener...")
+        pluginManager.registerEvents(StatsListener(this, statsManager, worldManager), this)
+        debugLogger.debug("StatsListener registered")
 
         logger.info("Listeners registered!")
         debugLogger.debugMethodExit("registerListeners")
@@ -299,7 +342,9 @@ class PlayerWorldManager : JavaPlugin() {
     fun getInviteManager(): InviteManager = inviteManager
     fun getChatManager(): ChatManager = chatManager
     fun getWorldUnloadManager(): WorldUnloadManager = worldUnloadManager
+    fun getStatsManager(): StatsManager = statsManager
     fun getMainMenuGui(): MainMenuGui = mainMenuGui
     fun getAdminMenuGui(): AdminMenuGui = adminMenuGui
+    fun getWorldStatsGui(): WorldStatsGui = worldStatsGui
     fun getDebugLogger(): DebugLogger = debugLogger
 }
