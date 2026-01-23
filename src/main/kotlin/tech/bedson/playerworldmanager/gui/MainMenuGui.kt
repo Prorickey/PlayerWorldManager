@@ -10,6 +10,7 @@ import org.bukkit.Bukkit
 import org.bukkit.Material
 import org.bukkit.entity.Player
 import org.bukkit.plugin.java.JavaPlugin
+import tech.bedson.playerworldmanager.managers.BackupManager
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
@@ -24,8 +25,13 @@ class MainMenuGui(
     private val plugin: JavaPlugin,
     private val worldManager: WorldManager,
     private val inviteManager: InviteManager,
-    private val dataManager: DataManager
+    private val dataManager: DataManager,
+    private var backupManager: BackupManager? = null
 ) {
+
+    fun setBackupManager(backupManager: BackupManager) {
+        this.backupManager = backupManager
+    }
     private val debugLogger = DebugLogger(plugin, "MainMenuGui")
 
     fun open(player: Player) {
@@ -204,7 +210,8 @@ class MainMenuGui(
                 // Open world management GUI on player's scheduler
                 player.scheduler.run(plugin, { _ ->
                     debugLogger.debug("Opening WorldManageGui", "player" to player.name, "worldName" to world.name)
-                    WorldManageGui(plugin, worldManager, inviteManager, dataManager).open(player, world)
+                    val gui = WorldManageGui(plugin, worldManager, inviteManager, dataManager, backupManager)
+                    gui.open(player, world)
                 }, null)
             }
         debugLogger.debugMethodExit("createWorldItem", "GuiItem for ${world.name}")

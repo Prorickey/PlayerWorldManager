@@ -14,11 +14,14 @@ import org.bukkit.Bukkit
 import org.bukkit.entity.Player
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.gui.MainMenuGui
+import tech.bedson.playerworldmanager.managers.BackupManager
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
 import tech.bedson.playerworldmanager.models.WorldType
+import java.text.SimpleDateFormat
+import java.util.Date
 import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.util.concurrent.CompletableFuture
 
@@ -31,6 +34,7 @@ class WorldCommands(
     private val worldManager: WorldManager,
     private val inviteManager: InviteManager,
     private val dataManager: DataManager,
+    private val backupManager: BackupManager,
     private val mainMenuGui: MainMenuGui
 ) {
     private val debugLogger = DebugLogger(plugin, "WorldCommands")
@@ -150,6 +154,62 @@ class WorldCommands(
             // /world help
             .then(Commands.literal("help")
                 .executes(::handleHelp)
+            )
+            // /world backup create [world] [description]
+            .then(Commands.literal("backup")
+                .requires { it.sender.hasPermission("playerworldmanager.backup") }
+                .then(Commands.literal("create")
+                    .then(Commands.argument("world", StringArgumentType.word())
+                        .suggests(::suggestOwnedWorlds)
+                        .then(Commands.argument("description", StringArgumentType.greedyString())
+                            .executes(::handleBackupCreateWithDescription)
+                        )
+                        .executes(::handleBackupCreateWithWorld)
+                    )
+                    .executes(::handleBackupCreate)
+                )
+                // /world backup list [world]
+                .then(Commands.literal("list")
+                    .then(Commands.argument("world", StringArgumentType.word())
+                        .suggests(::suggestOwnedWorlds)
+                        .executes(::handleBackupListWorld)
+                    )
+                    .executes(::handleBackupList)
+                )
+                // /world backup restore <backup-id>
+                .then(Commands.literal("restore")
+                    .then(Commands.argument("backup-id", StringArgumentType.word())
+                        .suggests(::suggestBackupIds)
+                        .executes(::handleBackupRestore)
+                    )
+                )
+                // /world backup delete <backup-id>
+                .then(Commands.literal("delete")
+                    .then(Commands.argument("backup-id", StringArgumentType.word())
+                        .suggests(::suggestBackupIds)
+                        .executes(::handleBackupDelete)
+                    )
+                )
+                // /world backup schedule <world> <enable|disable> [interval-minutes]
+                .then(Commands.literal("schedule")
+                    .then(Commands.argument("world", StringArgumentType.word())
+                        .suggests(::suggestOwnedWorlds)
+                        .then(Commands.literal("enable")
+                            .then(Commands.argument("interval", StringArgumentType.word())
+                                .executes(::handleBackupScheduleEnableWithInterval)
+                            )
+                            .executes(::handleBackupScheduleEnable)
+                        )
+                        .then(Commands.literal("disable")
+                            .executes(::handleBackupScheduleDisable)
+                        )
+                        .then(Commands.literal("status")
+                            .executes(::handleBackupScheduleStatus)
+                        )
+                    )
+                )
+                // Default backup help
+                .executes(::handleBackupHelp)
             )
             // Default (no args) opens main menu GUI
             .executes(::handleMenu)
@@ -1163,9 +1223,455 @@ class WorldCommands(
             Component.text("/world menu", NamedTextColor.GRAY)
                 .append(Component.text(" - Open the GUI menu", NamedTextColor.YELLOW))
         )
+        sender.sendMessage(
+            Component.text("/world backup", NamedTextColor.GRAY)
+                .append(Component.text(" - Manage world backups", NamedTextColor.YELLOW))
+        )
 
         debugLogger.debugMethodExit("handleHelp", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
+    }
+
+    // ========================
+    // Backup Command Handlers
+    // ========================
+
+    private fun handleBackupHelp(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupHelp", "sender" to ctx.source.sender.name)
+        val sender = ctx.source.sender
+
+        sender.sendMessage(Component.text("Backup Commands", NamedTextColor.GOLD))
+        sender.sendMessage(
+            Component.text("/world backup create [world] [description]", NamedTextColor.GRAY)
+                .append(Component.text(" - Create a backup", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world backup list [world]", NamedTextColor.GRAY)
+                .append(Component.text(" - List your backups", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world backup restore <id>", NamedTextColor.GRAY)
+                .append(Component.text(" - Restore from backup", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world backup delete <id>", NamedTextColor.GRAY)
+                .append(Component.text(" - Delete a backup", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world backup schedule <world> enable [interval]", NamedTextColor.GRAY)
+                .append(Component.text(" - Enable auto-backup", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world backup schedule <world> disable", NamedTextColor.GRAY)
+                .append(Component.text(" - Disable auto-backup", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world backup schedule <world> status", NamedTextColor.GRAY)
+                .append(Component.text(" - Check backup schedule", NamedTextColor.YELLOW))
+        )
+
+        debugLogger.debugMethodExit("handleBackupHelp", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupCreate(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupCreate", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val world = getCurrentWorld(player)
+        if (world == null) {
+            player.sendMessage(
+                Component.text("You must be in one of your worlds or specify a world name", NamedTextColor.RED)
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        return createBackupForWorld(player, world, null)
+    }
+
+    private fun handleBackupCreateWithWorld(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupCreateWithWorld", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val world = getPlayerWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
+
+        return createBackupForWorld(player, world, null)
+    }
+
+    private fun handleBackupCreateWithDescription(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupCreateWithDescription", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val description = StringArgumentType.getString(ctx, "description")
+        val world = getPlayerWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
+
+        return createBackupForWorld(player, world, description)
+    }
+
+    private fun createBackupForWorld(player: Player, world: PlayerWorld, description: String?): Int {
+        debugLogger.debug("Creating backup", "player" to player.name, "world" to world.name, "description" to description)
+
+        player.sendMessage(
+            Component.text("Creating backup for ", NamedTextColor.YELLOW)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text("...", NamedTextColor.YELLOW))
+        )
+
+        backupManager.createBackup(world, description, isAutomatic = false).thenAccept { result ->
+            result.onSuccess { backup ->
+                player.scheduler.run(plugin, { _ ->
+                    player.sendMessage(
+                        Component.text("Backup created successfully! ", NamedTextColor.GREEN)
+                            .append(Component.text("ID: ", NamedTextColor.GRAY))
+                            .append(Component.text(backup.id.toString().take(8), NamedTextColor.GOLD))
+                            .append(Component.text(" Size: ", NamedTextColor.GRAY))
+                            .append(Component.text(backup.getHumanReadableSize(), NamedTextColor.AQUA))
+                    )
+                }, null)
+            }.onFailure { error ->
+                player.scheduler.run(plugin, { _ ->
+                    player.sendMessage(
+                        Component.text("Failed to create backup: ", NamedTextColor.RED)
+                            .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+                    )
+                }, null)
+            }
+        }
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupList(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupList", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val backups = backupManager.getBackupsForPlayer(player.uniqueId)
+        if (backups.isEmpty()) {
+            player.sendMessage(Component.text("You don't have any backups", NamedTextColor.YELLOW))
+            return Command.SINGLE_SUCCESS
+        }
+
+        player.sendMessage(Component.text("Your backups:", NamedTextColor.GREEN))
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm")
+        backups.forEach { backup ->
+            val date = dateFormat.format(Date(backup.createdAt))
+            val autoLabel = if (backup.isAutomatic) " [Auto]" else ""
+            player.sendMessage(
+                Component.text("  ", NamedTextColor.GRAY)
+                    .append(Component.text(backup.id.toString().take(8), NamedTextColor.GOLD))
+                    .append(Component.text(" - ", NamedTextColor.GRAY))
+                    .append(Component.text(backup.worldName, NamedTextColor.AQUA))
+                    .append(Component.text(" ($date)", NamedTextColor.GRAY))
+                    .append(Component.text(autoLabel, NamedTextColor.YELLOW))
+                    .append(Component.text(" [${backup.getHumanReadableSize()}]", NamedTextColor.DARK_GRAY))
+            )
+            if (backup.description != null) {
+                player.sendMessage(
+                    Component.text("    ", NamedTextColor.GRAY)
+                        .append(Component.text(backup.description, NamedTextColor.GRAY))
+                )
+            }
+        }
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupListWorld(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupListWorld", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val world = getPlayerWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
+
+        val backups = backupManager.getBackupsForWorld(world.id)
+        if (backups.isEmpty()) {
+            player.sendMessage(
+                Component.text("No backups found for ", NamedTextColor.YELLOW)
+                    .append(Component.text(world.name, NamedTextColor.GOLD))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        player.sendMessage(
+            Component.text("Backups for ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(":", NamedTextColor.GREEN))
+        )
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm")
+        backups.forEach { backup ->
+            val date = dateFormat.format(Date(backup.createdAt))
+            val autoLabel = if (backup.isAutomatic) " [Auto]" else ""
+            player.sendMessage(
+                Component.text("  ", NamedTextColor.GRAY)
+                    .append(Component.text(backup.id.toString().take(8), NamedTextColor.GOLD))
+                    .append(Component.text(" - $date", NamedTextColor.GRAY))
+                    .append(Component.text(autoLabel, NamedTextColor.YELLOW))
+                    .append(Component.text(" [${backup.getHumanReadableSize()}]", NamedTextColor.DARK_GRAY))
+            )
+            if (backup.description != null) {
+                player.sendMessage(
+                    Component.text("    ", NamedTextColor.GRAY)
+                        .append(Component.text(backup.description, NamedTextColor.GRAY))
+                )
+            }
+        }
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupRestore(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupRestore", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val backupIdStr = StringArgumentType.getString(ctx, "backup-id")
+        val backup = findBackupByPartialId(player, backupIdStr)
+        if (backup == null) {
+            player.sendMessage(
+                Component.text("Backup not found: ", NamedTextColor.RED)
+                    .append(Component.text(backupIdStr, NamedTextColor.GOLD))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        // Verify ownership
+        if (backup.ownerUuid != player.uniqueId && !player.hasPermission("playerworldmanager.admin")) {
+            player.sendMessage(Component.text("You don't own this backup", NamedTextColor.RED))
+            return Command.SINGLE_SUCCESS
+        }
+
+        player.sendMessage(
+            Component.text("Restoring world ", NamedTextColor.YELLOW)
+                .append(Component.text(backup.worldName, NamedTextColor.GOLD))
+                .append(Component.text(" from backup...", NamedTextColor.YELLOW))
+        )
+
+        backupManager.restoreBackup(backup).thenAccept { result ->
+            result.onSuccess {
+                player.scheduler.run(plugin, { _ ->
+                    player.sendMessage(
+                        Component.text("World restored successfully! ", NamedTextColor.GREEN)
+                            .append(Component.text("Note: You may need to re-enter the world to see changes.", NamedTextColor.GRAY))
+                    )
+                }, null)
+            }.onFailure { error ->
+                player.scheduler.run(plugin, { _ ->
+                    player.sendMessage(
+                        Component.text("Failed to restore backup: ", NamedTextColor.RED)
+                            .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+                    )
+                }, null)
+            }
+        }
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupDelete(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupDelete", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val backupIdStr = StringArgumentType.getString(ctx, "backup-id")
+        val backup = findBackupByPartialId(player, backupIdStr)
+        if (backup == null) {
+            player.sendMessage(
+                Component.text("Backup not found: ", NamedTextColor.RED)
+                    .append(Component.text(backupIdStr, NamedTextColor.GOLD))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        // Verify ownership
+        if (backup.ownerUuid != player.uniqueId && !player.hasPermission("playerworldmanager.admin")) {
+            player.sendMessage(Component.text("You don't own this backup", NamedTextColor.RED))
+            return Command.SINGLE_SUCCESS
+        }
+
+        player.sendMessage(
+            Component.text("Deleting backup...", NamedTextColor.YELLOW)
+        )
+
+        backupManager.deleteBackup(backup).thenAccept { result ->
+            result.onSuccess {
+                player.scheduler.run(plugin, { _ ->
+                    player.sendMessage(
+                        Component.text("Backup deleted successfully!", NamedTextColor.GREEN)
+                    )
+                }, null)
+            }.onFailure { error ->
+                player.scheduler.run(plugin, { _ ->
+                    player.sendMessage(
+                        Component.text("Failed to delete backup: ", NamedTextColor.RED)
+                            .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+                    )
+                }, null)
+            }
+        }
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupScheduleEnable(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupScheduleEnable", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val world = getPlayerWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
+
+        val schedule = backupManager.setBackupSchedule(world.id, enabled = true)
+        player.sendMessage(
+            Component.text("Automatic backups enabled for ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(" (every ${schedule.intervalMinutes} minutes)", NamedTextColor.GRAY))
+        )
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupScheduleEnableWithInterval(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupScheduleEnableWithInterval", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val intervalStr = StringArgumentType.getString(ctx, "interval")
+        val interval = intervalStr.toIntOrNull()
+        if (interval == null || interval < 1) {
+            player.sendMessage(Component.text("Invalid interval. Must be a positive number of minutes.", NamedTextColor.RED))
+            return Command.SINGLE_SUCCESS
+        }
+
+        val world = getPlayerWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
+
+        val schedule = backupManager.setBackupSchedule(world.id, enabled = true, intervalMinutes = interval)
+        player.sendMessage(
+            Component.text("Automatic backups enabled for ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(" (every ${schedule.intervalMinutes} minutes)", NamedTextColor.GRAY))
+        )
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupScheduleDisable(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupScheduleDisable", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val world = getPlayerWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
+
+        backupManager.disableBackupSchedule(world.id)
+        player.sendMessage(
+            Component.text("Automatic backups disabled for ", NamedTextColor.YELLOW)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+        )
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleBackupScheduleStatus(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBackupScheduleStatus", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val world = getPlayerWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
+
+        val schedule = backupManager.getBackupSchedule(world.id)
+        if (schedule == null || !schedule.enabled) {
+            player.sendMessage(
+                Component.text("Automatic backups are ", NamedTextColor.GRAY)
+                    .append(Component.text("disabled", NamedTextColor.RED))
+                    .append(Component.text(" for ", NamedTextColor.GRAY))
+                    .append(Component.text(world.name, NamedTextColor.GOLD))
+            )
+        } else {
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm")
+            val lastBackup = if (schedule.lastBackupTime > 0) {
+                dateFormat.format(Date(schedule.lastBackupTime))
+            } else {
+                "Never"
+            }
+            player.sendMessage(
+                Component.text("Backup schedule for ", NamedTextColor.GRAY)
+                    .append(Component.text(world.name, NamedTextColor.GOLD))
+                    .append(Component.text(":", NamedTextColor.GRAY))
+            )
+            player.sendMessage(
+                Component.text("  Status: ", NamedTextColor.GRAY)
+                    .append(Component.text("Enabled", NamedTextColor.GREEN))
+            )
+            player.sendMessage(
+                Component.text("  Interval: ", NamedTextColor.GRAY)
+                    .append(Component.text("${schedule.intervalMinutes} minutes", NamedTextColor.AQUA))
+            )
+            player.sendMessage(
+                Component.text("  Last backup: ", NamedTextColor.GRAY)
+                    .append(Component.text(lastBackup, NamedTextColor.AQUA))
+            )
+        }
+
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun findBackupByPartialId(player: Player, partialId: String): tech.bedson.playerworldmanager.models.WorldBackup? {
+        // First try exact match
+        try {
+            val uuid = java.util.UUID.fromString(partialId)
+            val backup = backupManager.getBackup(uuid)
+            if (backup != null && (backup.ownerUuid == player.uniqueId || player.hasPermission("playerworldmanager.admin"))) {
+                return backup
+            }
+        } catch (_: IllegalArgumentException) {
+            // Not a valid UUID, try partial match
+        }
+
+        // Try partial ID match
+        val playerBackups = backupManager.getBackupsForPlayer(player.uniqueId)
+        return playerBackups.firstOrNull { it.id.toString().startsWith(partialId, ignoreCase = true) }
     }
 
     // ========================
@@ -1261,6 +1767,20 @@ class WorldCommands(
             inviteManager.getPendingInvites(sender.uniqueId)
                 .filter { it.ownerName.equals(ownerName, ignoreCase = true) }
                 .map { it.worldName }
+                .filter { it.lowercase().startsWith(builder.remainingLowerCase) }
+                .forEach { builder.suggest(it) }
+        }
+        return builder.buildFuture()
+    }
+
+    private fun suggestBackupIds(
+        ctx: CommandContext<CommandSourceStack>,
+        builder: SuggestionsBuilder
+    ): CompletableFuture<Suggestions> {
+        val sender = ctx.source.sender
+        if (sender is Player) {
+            backupManager.getBackupsForPlayer(sender.uniqueId)
+                .map { it.id.toString().take(8) }
                 .filter { it.lowercase().startsWith(builder.remainingLowerCase) }
                 .forEach { builder.suggest(it) }
         }

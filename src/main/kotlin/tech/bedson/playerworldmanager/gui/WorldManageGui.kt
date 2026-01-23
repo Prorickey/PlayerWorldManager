@@ -11,6 +11,7 @@ import org.bukkit.Material
 import org.bukkit.World
 import org.bukkit.entity.Player
 import org.bukkit.plugin.java.JavaPlugin
+import tech.bedson.playerworldmanager.managers.BackupManager
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
@@ -28,10 +29,19 @@ import java.util.concurrent.ConcurrentHashMap
 class WorldManageGui(
     private val plugin: JavaPlugin,
     private val worldManager: WorldManager,
-    private val inviteManager: InviteManager,
-    private val dataManager: DataManager
+    private val inviteManager: InviteManager?,
+    private val dataManager: DataManager,
+    private var backupManager: BackupManager? = null
 ) {
     private val debugLogger = DebugLogger(plugin, "WorldManageGui")
+
+    /**
+     * Open the GUI with a backup manager reference for backup functionality.
+     */
+    fun openWithBackupManager(player: Player, world: PlayerWorld, backupManager: BackupManager) {
+        this.backupManager = backupManager
+        open(player, world)
+    }
 
     companion object {
         private val pendingDeletes = ConcurrentHashMap<UUID, PendingDelete>()
@@ -74,10 +84,11 @@ class WorldManageGui(
         gui.setItem(11, createGameModeItem(player, world))
         gui.setItem(12, createSetSpawnItem(player, world))
 
-        // Row 3: Invite/Kick
-        debugLogger.debug("Setting up Row 3: Invite/Kick")
+        // Row 3: Invite/Kick/Backup
+        debugLogger.debug("Setting up Row 3: Invite/Kick/Backup")
         gui.setItem(18, createInvitePlayerItem(player, world))
         gui.setItem(19, createKickPlayerItem(player, world))
+        gui.setItem(21, createBackupItem(player, world))
 
         // Row 4: Ownership
         debugLogger.debug("Setting up Row 4: Ownership")
@@ -375,6 +386,44 @@ class WorldManageGui(
                 )
             }
         debugLogger.debugMethodExit("createKickPlayerItem")
+        return item
+    }
+
+    private fun createBackupItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createBackupItem", "player" to player.name, "worldName" to world.name)
+
+        val bm = backupManager
+        val backupCount = bm?.getBackupsForWorld(world.id)?.size ?: 0
+        val maxBackups = bm?.getMaxBackupsPerWorld() ?: 5
+        val schedule = bm?.getBackupSchedule(world.id)
+        val scheduleStatus = if (schedule?.enabled == true) "Enabled" else "Disabled"
+
+        val item = ItemBuilder.from(Material.ENDER_CHEST)
+            .name(Component.text("Backups", NamedTextColor.AQUA))
+            .lore(listOf(
+                Component.text("Manage world backups", NamedTextColor.GRAY),
+                Component.empty(),
+                Component.text("Backups: $backupCount / $maxBackups", NamedTextColor.GRAY),
+                Component.text("Auto-backup: $scheduleStatus", NamedTextColor.GRAY),
+                Component.empty(),
+                Component.text("Click to manage backups", NamedTextColor.YELLOW)
+            ))
+            .asGuiItem { event ->
+                event.isCancelled = true
+                debugLogger.debug("Backup button clicked", "player" to player.name, "worldName" to world.name)
+
+                if (bm == null) {
+                    player.sendMessage(Component.text("Backup system not available", NamedTextColor.RED))
+                    return@asGuiItem
+                }
+
+                player.closeInventory()
+                player.scheduler.run(plugin, { _ ->
+                    BackupGui(plugin, worldManager, bm, dataManager).open(player, world)
+                }, null)
+            }
+
+        debugLogger.debugMethodExit("createBackupItem")
         return item
     }
 

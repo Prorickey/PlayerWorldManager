@@ -26,3 +26,12 @@ worlds:
   default-type: "NORMAL"
   # Default world environment (NORMAL, NETHER, THE_END)
   default-environment: "NORMAL"
+
+# Backup settings
+backups:
+  # Enable automatic scheduled backups globally
+  auto-backup-enabled: true
+  # Maximum number of backups to keep per world (oldest are deleted when limit is reached)
+  max-backups-per-world: 5
+  # Default interval for automatic backups in minutes (1440 = 24 hours)
+  default-interval-minutes: 1440
