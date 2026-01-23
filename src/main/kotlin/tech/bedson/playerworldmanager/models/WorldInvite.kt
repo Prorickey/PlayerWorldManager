@@ -10,11 +10,12 @@ import java.util.UUID
 data class WorldInvite(
     val worldId: UUID,           // Which world
     val worldName: String,       // World name for display
-    val ownerUuid: UUID,         // Who sent the invite
-    val ownerName: String,       // Owner name for display
+    val ownerUuid: UUID,         // Who sent the invite (may be owner or manager)
+    val ownerName: String,       // Sender name for display
     val inviteeUuid: UUID,       // Who received the invite
     val inviteeName: String,     // Invitee name for display
-    val sentAt: Long             // Timestamp
+    val sentAt: Long,            // Timestamp
+    val assignedRole: WorldRole = WorldRole.MEMBER  // Role to be assigned upon acceptance
 ) {
     companion object {
         /**
@@ -28,16 +29,18 @@ data class WorldInvite(
             ownerName: String,
             inviteeUuid: UUID,
             inviteeName: String,
-            sentAt: Long
+            sentAt: Long,
+            assignedRole: WorldRole = WorldRole.MEMBER
         ): WorldInvite {
             val debugLogger = DebugLogger(plugin, "WorldInvite")
             debugLogger.debug("Creating WorldInvite",
                 "worldId" to worldId,
                 "worldName" to worldName,
-                "owner" to ownerName,
-                "invitee" to inviteeName
+                "sender" to ownerName,
+                "invitee" to inviteeName,
+                "assignedRole" to assignedRole
             )
-            return WorldInvite(worldId, worldName, ownerUuid, ownerName, inviteeUuid, inviteeName, sentAt)
+            return WorldInvite(worldId, worldName, ownerUuid, ownerName, inviteeUuid, inviteeName, sentAt, assignedRole)
         }
     }
 
@@ -46,13 +49,14 @@ data class WorldInvite(
      */
     fun toDebugString(): String {
         return "WorldInvite(worldId=$worldId, world=$worldName, " +
-                "from=$ownerName/$ownerUuid, to=$inviteeName/$inviteeUuid, sentAt=$sentAt)"
+                "from=$ownerName/$ownerUuid, to=$inviteeName/$inviteeUuid, " +
+                "sentAt=$sentAt, role=$assignedRole)"
     }
 
     /**
      * Returns a compact debug string for logging.
      */
     fun toCompactDebugString(): String {
-        return "WorldInvite[$worldName: $ownerName -> $inviteeName]"
+        return "WorldInvite[$worldName: $ownerName -> $inviteeName as $assignedRole]"
     }
 }

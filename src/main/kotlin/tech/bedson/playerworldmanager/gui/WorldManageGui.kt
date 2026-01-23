@@ -13,6 +13,7 @@ import org.bukkit.entity.Player
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
+import tech.bedson.playerworldmanager.managers.StatsManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
 import tech.bedson.playerworldmanager.models.TimeLock
@@ -29,7 +30,8 @@ class WorldManageGui(
     private val plugin: JavaPlugin,
     private val worldManager: WorldManager,
     private val inviteManager: InviteManager,
-    private val dataManager: DataManager
+    private val dataManager: DataManager,
+    private val statsManager: StatsManager? = null
 ) {
     private val debugLogger = DebugLogger(plugin, "WorldManageGui")
 
@@ -75,10 +77,11 @@ class WorldManageGui(
         gui.setItem(12, createSetSpawnItem(player, world))
         gui.setItem(13, createWorldBorderItem(player, world))
 
-        // Row 3: Invite/Kick
-        debugLogger.debug("Setting up Row 3: Invite/Kick")
+        // Row 3: Invite/Kick/Stats
+        debugLogger.debug("Setting up Row 3: Invite/Kick/Stats")
         gui.setItem(18, createInvitePlayerItem(player, world))
         gui.setItem(19, createKickPlayerItem(player, world))
+        gui.setItem(20, createStatsItem(player, world))
 
         // Row 4: Ownership
         debugLogger.debug("Setting up Row 4: Ownership")
@@ -406,6 +409,50 @@ class WorldManageGui(
             }
         debugLogger.debugMethodExit("createKickPlayerItem")
         return item
+    }
+
+    private fun createStatsItem(player: Player, world: PlayerWorld): GuiItem {
+        debugLogger.debugMethodEntry("createStatsItem", "player" to player.name, "worldName" to world.name)
+
+        val stats = statsManager?.getWorldStats(world.id)
+        val blocksPlaced = stats?.blocksPlaced ?: 0L
+        val blocksBroken = stats?.blocksBroken ?: 0L
+        val mobsKilled = stats?.mobsKilled ?: 0L
+
+        val item = ItemBuilder.from(Material.PAPER)
+            .name(Component.text("World Statistics", NamedTextColor.AQUA))
+            .lore(
+                listOf(
+                    Component.text("View statistics for this world", NamedTextColor.GRAY),
+                    Component.empty(),
+                    Component.text("Quick Stats:", NamedTextColor.YELLOW),
+                    Component.text("  Blocks Placed: ${formatNumber(blocksPlaced)}", NamedTextColor.GRAY),
+                    Component.text("  Blocks Broken: ${formatNumber(blocksBroken)}", NamedTextColor.GRAY),
+                    Component.text("  Mobs Killed: ${formatNumber(mobsKilled)}", NamedTextColor.GRAY),
+                    Component.empty(),
+                    Component.text("Click to view detailed stats", NamedTextColor.YELLOW)
+                )
+            )
+            .asGuiItem { event ->
+                event.isCancelled = true
+                debugLogger.debug("Stats button clicked", "player" to player.name, "worldName" to world.name)
+                player.closeInventory()
+                if (statsManager != null) {
+                    player.scheduler.run(plugin, { _ ->
+                        WorldStatsGui(plugin, statsManager, worldManager, inviteManager, dataManager).open(player, world)
+                    }, null)
+                } else {
+                    player.sendMessage(
+                        Component.text("Statistics are not available.", NamedTextColor.RED)
+                    )
+                }
+            }
+        debugLogger.debugMethodExit("createStatsItem")
+        return item
+    }
+
+    private fun formatNumber(number: Long): String {
+        return String.format("%,d", number)
     }
 
     private fun createTransferOwnershipItem(player: Player, world: PlayerWorld): GuiItem {

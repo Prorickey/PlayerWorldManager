@@ -18,6 +18,7 @@ import tech.bedson.playerworldmanager.managers.DataManager
 import tech.bedson.playerworldmanager.managers.InviteManager
 import tech.bedson.playerworldmanager.managers.WorldManager
 import tech.bedson.playerworldmanager.models.PlayerWorld
+import tech.bedson.playerworldmanager.models.WorldRole
 import tech.bedson.playerworldmanager.models.WorldType
 import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.util.concurrent.CompletableFuture
@@ -150,6 +151,51 @@ class WorldCommands(
             // /world help
             .then(Commands.literal("help")
                 .executes(::handleHelp)
+            )
+            // /world role <player> <role> [world] - Set a player's role (owner only)
+            .then(Commands.literal("role")
+                .then(Commands.argument("player", StringArgumentType.word())
+                    .suggests(::suggestWorldMembers)
+                    .then(Commands.argument("role", StringArgumentType.word())
+                        .suggests(::suggestRoles)
+                        .then(Commands.argument("world", StringArgumentType.word())
+                            .suggests(::suggestOwnedWorlds)
+                            .executes(::handleRoleWithWorld)
+                        )
+                        .executes(::handleRole)
+                    )
+                )
+            )
+            // /world visibility [world] - Toggle public/private (owner only)
+            .then(Commands.literal("visibility")
+                .then(Commands.argument("world", StringArgumentType.word())
+                    .suggests(::suggestOwnedWorlds)
+                    .executes(::handleVisibilityWithWorld)
+                )
+                .executes(::handleVisibility)
+            )
+            // /world publicrole <role> [world] - Set public join role (owner only)
+            .then(Commands.literal("publicrole")
+                .then(Commands.argument("role", StringArgumentType.word())
+                    .suggests(::suggestPublicRoles)
+                    .then(Commands.argument("world", StringArgumentType.word())
+                        .suggests(::suggestOwnedWorlds)
+                        .executes(::handlePublicRoleWithWorld)
+                    )
+                    .executes(::handlePublicRole)
+                )
+            )
+            // /world members [world] - View all player roles in a world
+            .then(Commands.literal("members")
+                .then(Commands.argument("world", StringArgumentType.word())
+                    .suggests(::suggestOwnedWorlds)
+                    .executes(::handleMembersWithWorld)
+                )
+                .executes(::handleMembers)
+            )
+            // /world browse - Browse public worlds
+            .then(Commands.literal("browse")
+                .executes(::handleBrowse)
             )
             // Default (no args) opens main menu GUI
             .executes(::handleMenu)
@@ -1163,8 +1209,388 @@ class WorldCommands(
             Component.text("/world menu", NamedTextColor.GRAY)
                 .append(Component.text(" - Open the GUI menu", NamedTextColor.YELLOW))
         )
+        sender.sendMessage(
+            Component.text("/world role <player> <role> [world]", NamedTextColor.GRAY)
+                .append(Component.text(" - Set player role", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world visibility [world]", NamedTextColor.GRAY)
+                .append(Component.text(" - Toggle public/private", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world publicrole <role> [world]", NamedTextColor.GRAY)
+                .append(Component.text(" - Set public join role", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world members [world]", NamedTextColor.GRAY)
+                .append(Component.text(" - View world members", NamedTextColor.YELLOW))
+        )
+        sender.sendMessage(
+            Component.text("/world browse", NamedTextColor.GRAY)
+                .append(Component.text(" - Browse public worlds", NamedTextColor.YELLOW))
+        )
 
         debugLogger.debugMethodExit("handleHelp", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleRole(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleRole", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handleRole", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val targetName = StringArgumentType.getString(ctx, "player")
+        val roleString = StringArgumentType.getString(ctx, "role")
+        debugLogger.debug("Parsed arguments", "targetName" to targetName, "roleString" to roleString)
+
+        val target = Bukkit.getOfflinePlayer(targetName)
+        val targetExists = target.hasPlayedBefore() || target.isOnline
+        if (!targetExists) {
+            player.sendMessage(
+                Component.text("Player '", NamedTextColor.RED)
+                    .append(Component.text(targetName, NamedTextColor.GOLD))
+                    .append(Component.text("' not found", NamedTextColor.RED))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        val role = parseRole(roleString)
+        if (role == null) {
+            player.sendMessage(
+                Component.text("Invalid role. Valid roles: ", NamedTextColor.RED)
+                    .append(Component.text("manager, member, visitor", NamedTextColor.GOLD))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        val world = getCurrentOwnedWorld(player)
+        if (world == null) {
+            player.sendMessage(
+                Component.text("You must specify a world name or be in one of your owned worlds", NamedTextColor.RED)
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        inviteManager.setPlayerRole(world, player, target.uniqueId, role).onFailure { error ->
+            player.sendMessage(
+                Component.text("Failed to set role: ", NamedTextColor.RED)
+                    .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+            )
+        }
+
+        debugLogger.debugMethodExit("handleRole", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleRoleWithWorld(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleRoleWithWorld", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handleRoleWithWorld", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val targetName = StringArgumentType.getString(ctx, "player")
+        val roleString = StringArgumentType.getString(ctx, "role")
+        val worldName = StringArgumentType.getString(ctx, "world")
+        debugLogger.debug("Parsed arguments", "targetName" to targetName, "roleString" to roleString, "worldName" to worldName)
+
+        val target = Bukkit.getOfflinePlayer(targetName)
+        val targetExists = target.hasPlayedBefore() || target.isOnline
+        if (!targetExists) {
+            player.sendMessage(
+                Component.text("Player '", NamedTextColor.RED)
+                    .append(Component.text(targetName, NamedTextColor.GOLD))
+                    .append(Component.text("' not found", NamedTextColor.RED))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        val role = parseRole(roleString)
+        if (role == null) {
+            player.sendMessage(
+                Component.text("Invalid role. Valid roles: ", NamedTextColor.RED)
+                    .append(Component.text("manager, member, visitor", NamedTextColor.GOLD))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        val world = getPlayerWorld(player, worldName)
+        if (world == null) {
+            return Command.SINGLE_SUCCESS
+        }
+
+        inviteManager.setPlayerRole(world, player, target.uniqueId, role).onFailure { error ->
+            player.sendMessage(
+                Component.text("Failed to set role: ", NamedTextColor.RED)
+                    .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+            )
+        }
+
+        debugLogger.debugMethodExit("handleRoleWithWorld", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleVisibility(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleVisibility", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handleVisibility", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val world = getCurrentOwnedWorld(player)
+        if (world == null) {
+            player.sendMessage(
+                Component.text("You must specify a world name or be in one of your owned worlds", NamedTextColor.RED)
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        inviteManager.toggleWorldVisibility(world, player).onFailure { error ->
+            player.sendMessage(
+                Component.text("Failed to toggle visibility: ", NamedTextColor.RED)
+                    .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+            )
+        }
+
+        debugLogger.debugMethodExit("handleVisibility", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleVisibilityWithWorld(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleVisibilityWithWorld", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handleVisibilityWithWorld", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val world = getPlayerWorld(player, worldName)
+        if (world == null) {
+            return Command.SINGLE_SUCCESS
+        }
+
+        inviteManager.toggleWorldVisibility(world, player).onFailure { error ->
+            player.sendMessage(
+                Component.text("Failed to toggle visibility: ", NamedTextColor.RED)
+                    .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+            )
+        }
+
+        debugLogger.debugMethodExit("handleVisibilityWithWorld", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handlePublicRole(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handlePublicRole", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handlePublicRole", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val roleString = StringArgumentType.getString(ctx, "role")
+        val role = parsePublicRole(roleString)
+        if (role == null) {
+            player.sendMessage(
+                Component.text("Invalid role. Valid public roles: ", NamedTextColor.RED)
+                    .append(Component.text("member, visitor", NamedTextColor.GOLD))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        val world = getCurrentOwnedWorld(player)
+        if (world == null) {
+            player.sendMessage(
+                Component.text("You must specify a world name or be in one of your owned worlds", NamedTextColor.RED)
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        inviteManager.setPublicJoinRole(world, player, role).onFailure { error ->
+            player.sendMessage(
+                Component.text("Failed to set public role: ", NamedTextColor.RED)
+                    .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+            )
+        }
+
+        debugLogger.debugMethodExit("handlePublicRole", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handlePublicRoleWithWorld(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handlePublicRoleWithWorld", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handlePublicRoleWithWorld", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val roleString = StringArgumentType.getString(ctx, "role")
+        val worldName = StringArgumentType.getString(ctx, "world")
+
+        val role = parsePublicRole(roleString)
+        if (role == null) {
+            player.sendMessage(
+                Component.text("Invalid role. Valid public roles: ", NamedTextColor.RED)
+                    .append(Component.text("member, visitor", NamedTextColor.GOLD))
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        val world = getPlayerWorld(player, worldName)
+        if (world == null) {
+            return Command.SINGLE_SUCCESS
+        }
+
+        inviteManager.setPublicJoinRole(world, player, role).onFailure { error ->
+            player.sendMessage(
+                Component.text("Failed to set public role: ", NamedTextColor.RED)
+                    .append(Component.text(error.message ?: "Unknown error", NamedTextColor.GOLD))
+            )
+        }
+
+        debugLogger.debugMethodExit("handlePublicRoleWithWorld", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleMembers(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleMembers", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handleMembers", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val world = getCurrentOwnedWorld(player)
+        if (world == null) {
+            player.sendMessage(
+                Component.text("You must specify a world name or be in one of your owned worlds", NamedTextColor.RED)
+            )
+            return Command.SINGLE_SUCCESS
+        }
+
+        displayWorldMembers(player, world)
+
+        debugLogger.debugMethodExit("handleMembers", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun handleMembersWithWorld(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleMembersWithWorld", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handleMembersWithWorld", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val worldName = StringArgumentType.getString(ctx, "world")
+        val world = getPlayerWorld(player, worldName)
+        if (world == null) {
+            return Command.SINGLE_SUCCESS
+        }
+
+        displayWorldMembers(player, world)
+
+        debugLogger.debugMethodExit("handleMembersWithWorld", Command.SINGLE_SUCCESS)
+        return Command.SINGLE_SUCCESS
+    }
+
+    private fun displayWorldMembers(player: Player, world: PlayerWorld) {
+        player.sendMessage(
+            Component.text("Members of ", NamedTextColor.GREEN)
+                .append(Component.text(world.name, NamedTextColor.GOLD))
+                .append(Component.text(":", NamedTextColor.GREEN))
+        )
+
+        // Show visibility status
+        val visibilityText = if (world.isPublic) "Public" else "Private"
+        val publicRoleText = if (world.isPublic) " (joins as ${world.publicJoinRole.name.lowercase()})" else ""
+        player.sendMessage(
+            Component.text("  Visibility: ", NamedTextColor.GRAY)
+                .append(Component.text(visibilityText + publicRoleText, NamedTextColor.YELLOW))
+        )
+
+        // Show owner
+        player.sendMessage(
+            Component.text("  ", NamedTextColor.GRAY)
+                .append(Component.text(world.ownerName, NamedTextColor.GOLD))
+                .append(Component.text(" - ", NamedTextColor.GRAY))
+                .append(Component.text("Owner", NamedTextColor.RED))
+        )
+
+        // Show all players with roles
+        if (world.playerRoles.isEmpty()) {
+            player.sendMessage(Component.text("  No other members", NamedTextColor.GRAY))
+        } else {
+            world.playerRoles.forEach { (uuid, role) ->
+                val playerName = Bukkit.getOfflinePlayer(uuid).name ?: uuid.toString()
+                val roleColor = when (role) {
+                    WorldRole.MANAGER -> NamedTextColor.GOLD
+                    WorldRole.MEMBER -> NamedTextColor.GREEN
+                    WorldRole.VISITOR -> NamedTextColor.AQUA
+                    else -> NamedTextColor.GRAY
+                }
+                player.sendMessage(
+                    Component.text("  ", NamedTextColor.GRAY)
+                        .append(Component.text(playerName, NamedTextColor.WHITE))
+                        .append(Component.text(" - ", NamedTextColor.GRAY))
+                        .append(Component.text(role.name.lowercase().replaceFirstChar { it.uppercase() }, roleColor))
+                )
+            }
+        }
+    }
+
+    private fun handleBrowse(ctx: CommandContext<CommandSourceStack>): Int {
+        debugLogger.debugMethodEntry("handleBrowse", "sender" to ctx.source.sender.name)
+
+        val player = ctx.source.sender as? Player
+        if (player == null) {
+            debugLogger.debugMethodExit("handleBrowse", "player-only error")
+            return sendPlayerOnlyError(ctx)
+        }
+
+        val publicWorlds = dataManager.getAllWorlds().filter { it.isPublic && it.isEnabled }
+
+        if (publicWorlds.isEmpty()) {
+            player.sendMessage(Component.text("No public worlds available", NamedTextColor.YELLOW))
+            return Command.SINGLE_SUCCESS
+        }
+
+        player.sendMessage(Component.text("Public Worlds:", NamedTextColor.GREEN))
+        publicWorlds.forEach { world ->
+            val joinRoleText = when (world.publicJoinRole) {
+                WorldRole.MEMBER -> "can play"
+                WorldRole.VISITOR -> "spectator only"
+                else -> ""
+            }
+            player.sendMessage(
+                Component.text("  - ", NamedTextColor.GRAY)
+                    .append(Component.text(world.name, NamedTextColor.GOLD))
+                    .append(Component.text(" by ", NamedTextColor.GRAY))
+                    .append(Component.text(world.ownerName, NamedTextColor.WHITE))
+                    .append(Component.text(" ($joinRoleText)", NamedTextColor.DARK_GRAY))
+            )
+            player.sendMessage(
+                Component.text("    ", NamedTextColor.GRAY)
+                    .append(Component.text("/world visit ${world.ownerName} ${world.name}", NamedTextColor.YELLOW))
+            )
+        }
+
+        debugLogger.debugMethodExit("handleBrowse", Command.SINGLE_SUCCESS)
         return Command.SINGLE_SUCCESS
     }
 
@@ -1267,6 +1693,44 @@ class WorldCommands(
         return builder.buildFuture()
     }
 
+    private fun suggestWorldMembers(
+        ctx: CommandContext<CommandSourceStack>,
+        builder: SuggestionsBuilder
+    ): CompletableFuture<Suggestions> {
+        val sender = ctx.source.sender
+        if (sender is Player) {
+            // Get current world's members
+            val currentWorld = getCurrentOwnedWorld(sender)
+            if (currentWorld != null) {
+                currentWorld.playerRoles.keys
+                    .mapNotNull { Bukkit.getOfflinePlayer(it).name }
+                    .filter { it.lowercase().startsWith(builder.remainingLowerCase) }
+                    .forEach { builder.suggest(it) }
+            }
+        }
+        return builder.buildFuture()
+    }
+
+    private fun suggestRoles(
+        ctx: CommandContext<CommandSourceStack>,
+        builder: SuggestionsBuilder
+    ): CompletableFuture<Suggestions> {
+        listOf("manager", "member", "visitor")
+            .filter { it.startsWith(builder.remainingLowerCase) }
+            .forEach { builder.suggest(it) }
+        return builder.buildFuture()
+    }
+
+    private fun suggestPublicRoles(
+        ctx: CommandContext<CommandSourceStack>,
+        builder: SuggestionsBuilder
+    ): CompletableFuture<Suggestions> {
+        listOf("member", "visitor")
+            .filter { it.startsWith(builder.remainingLowerCase) }
+            .forEach { builder.suggest(it) }
+        return builder.buildFuture()
+    }
+
     // ========================
     // Helper Methods
     // ========================
@@ -1298,6 +1762,10 @@ class WorldCommands(
         return world
     }
 
+    /**
+     * Get the player's world they are currently in, if they have management permissions (owner or manager).
+     * Returns null if not in a world where they have invite/kick permissions.
+     */
     private fun getCurrentWorld(player: Player): PlayerWorld? {
         debugLogger.debugMethodEntry("getCurrentWorld", "player" to player.name, "bukkitWorld" to player.world.name)
         val currentWorld = worldManager.getPlayerWorldFromBukkitWorld(player.world)
@@ -1308,10 +1776,11 @@ class WorldCommands(
             return null
         }
 
-        val isOwner = currentWorld.ownerUuid == player.uniqueId
-        debugLogger.debug("Ownership check", "worldOwner" to currentWorld.ownerUuid, "player" to player.uniqueId, "isOwner" to isOwner)
-        if (!isOwner) {
-            debugLogger.debugMethodExit("getCurrentWorld", "not owner")
+        val playerRole = currentWorld.getPlayerRole(player.uniqueId)
+        val canManage = playerRole?.canInvite() == true
+        debugLogger.debug("Permission check", "worldOwner" to currentWorld.ownerUuid, "player" to player.uniqueId, "role" to playerRole, "canManage" to canManage)
+        if (!canManage) {
+            debugLogger.debugMethodExit("getCurrentWorld", "no permission")
             return null
         }
 
@@ -1331,5 +1800,90 @@ class WorldCommands(
         }
         debugLogger.debugMethodExit("parseWorldType", result)
         return result
+    }
+
+    private fun parseRole(role: String): WorldRole? {
+        debugLogger.debugMethodEntry("parseRole", "role" to role)
+        val result = when (role.lowercase()) {
+            "manager" -> WorldRole.MANAGER
+            "member" -> WorldRole.MEMBER
+            "visitor" -> WorldRole.VISITOR
+            else -> null
+        }
+        debugLogger.debugMethodExit("parseRole", result)
+        return result
+    }
+
+    private fun parsePublicRole(role: String): WorldRole? {
+        debugLogger.debugMethodEntry("parsePublicRole", "role" to role)
+        val result = when (role.lowercase()) {
+            "member" -> WorldRole.MEMBER
+            "visitor" -> WorldRole.VISITOR
+            else -> null
+        }
+        debugLogger.debugMethodExit("parsePublicRole", result)
+        return result
+    }
+
+    /**
+     * Get the player's owned world they are currently in.
+     * Returns null if not in a world they own.
+     */
+    private fun getCurrentOwnedWorld(player: Player): PlayerWorld? {
+        debugLogger.debugMethodEntry("getCurrentOwnedWorld", "player" to player.name, "bukkitWorld" to player.world.name)
+        val currentWorld = worldManager.getPlayerWorldFromBukkitWorld(player.world)
+        debugLogger.debug("Player world lookup", "bukkitWorld" to player.world.name, "found" to (currentWorld != null))
+
+        if (currentWorld == null) {
+            debugLogger.debugMethodExit("getCurrentOwnedWorld", null)
+            return null
+        }
+
+        val isOwner = currentWorld.ownerUuid == player.uniqueId
+        debugLogger.debug("Ownership check", "worldOwner" to currentWorld.ownerUuid, "player" to player.uniqueId, "isOwner" to isOwner)
+        if (!isOwner) {
+            debugLogger.debugMethodExit("getCurrentOwnedWorld", "not owner")
+            return null
+        }
+
+        debugLogger.debugMethodExit("getCurrentOwnedWorld", currentWorld.name)
+        return currentWorld
+    }
+
+    /**
+     * Get a world where the player has manager permission or higher.
+     * Used for commands that managers can also execute.
+     */
+    private fun getWorldWithPermission(player: Player, name: String): PlayerWorld? {
+        debugLogger.debugMethodEntry("getWorldWithPermission", "playerUuid" to player.uniqueId, "name" to name)
+
+        // First try owned worlds
+        val ownedWorld = dataManager.getWorldsByOwner(player.uniqueId)
+            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+        if (ownedWorld != null) {
+            debugLogger.debugMethodExit("getWorldWithPermission", "owned: ${ownedWorld.name}")
+            return ownedWorld
+        }
+
+        // Then check if they're a manager in any world with that name
+        val allWorlds = dataManager.getAllWorlds()
+        val managedWorld = allWorlds.firstOrNull { world ->
+            world.name.equals(name, ignoreCase = true) &&
+            world.getPlayerRole(player.uniqueId)?.canInvite() == true
+        }
+
+        if (managedWorld != null) {
+            debugLogger.debugMethodExit("getWorldWithPermission", "managed: ${managedWorld.name}")
+            return managedWorld
+        }
+
+        player.sendMessage(
+            Component.text("You don't have permission for world '", NamedTextColor.RED)
+                .append(Component.text(name, NamedTextColor.GOLD))
+                .append(Component.text("'", NamedTextColor.RED))
+        )
+
+        debugLogger.debugMethodExit("getWorldWithPermission", null)
+        return null
     }
 }
