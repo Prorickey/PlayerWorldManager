@@ -500,6 +500,23 @@ class InviteManager(
     }
 
     /**
+     * Check if a player is invited to a world (has access but is NOT the owner).
+     *
+     * @param playerUuid The player's UUID
+     * @param world The world to check
+     * @return True if player has access but is not the owner
+     */
+    fun isInvited(playerUuid: UUID, world: PlayerWorld): Boolean {
+        debugLogger.debugMethodEntry("isInvited", "playerUuid" to playerUuid, "worldName" to world.name)
+        val isOwner = world.ownerUuid == playerUuid
+        val hasRole = world.playerRoles.containsKey(playerUuid) || world.invitedPlayers.contains(playerUuid)
+        val result = hasRole && !isOwner
+        debugLogger.debug("isInvited check", "isOwner" to isOwner, "hasRole" to hasRole, "result" to result)
+        debugLogger.debugMethodExit("isInvited", result)
+        return result
+    }
+
+    /**
      * Get the role of a player in a world.
      *
      * @param playerUuid The player's UUID

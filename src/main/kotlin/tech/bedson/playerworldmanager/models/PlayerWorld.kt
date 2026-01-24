@@ -228,7 +228,7 @@ enum class WeatherLock {
  * Mirrors Minecraft's vanilla world border features.
  */
 data class WorldBorderSettings(
-    var size: Double = 60000000.0,           // Border diameter in blocks (default: Minecraft default)
+    var size: Double = 59999968.0,           // Border diameter in blocks (Minecraft max: 59999968)
     var centerX: Double = 0.0,               // Center X coordinate
     var centerZ: Double = 0.0,               // Center Z coordinate
     var damageAmount: Double = 0.2,          // Damage per block per second outside buffer

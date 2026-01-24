@@ -41,22 +41,32 @@ paperweight.reobfArtifactConfiguration =
 val buildId: String by lazy { UUID.randomUUID().toString().substring(0, 8) }
 val buildTime: String by lazy { Instant.now().toString() }
 
-// Create build-info.properties in src/main/resources before processResources
+// Build info generation - creates properties file with build metadata
+fun generateBuildInfoFile(outputFile: File, isDebug: Boolean) {
+    val newBuildId = UUID.randomUUID().toString().substring(0, 8)
+    val newBuildTime = Instant.now().toString()
+    outputFile.writeText("""
+        build.id=$newBuildId
+        build.time=$newBuildTime
+        build.version=${project.version}
+        build.debug=$isDebug
+    """.trimIndent())
+    println("Generated build ID: $newBuildId (debug=$isDebug)")
+}
+
+// Default build info generation (debug mode for development)
 val generateBuildInfo = tasks.register("generateBuildInfo") {
     val outputFile = file("src/main/resources/build-info.properties")
     outputs.file(outputFile)
     outputs.upToDateWhen { false }  // Always regenerate
     doLast {
-        val newBuildId = UUID.randomUUID().toString().substring(0, 8)
-        val newBuildTime = Instant.now().toString()
-        outputFile.writeText("""
-            build.id=$newBuildId
-            build.time=$newBuildTime
-            build.version=${project.version}
-        """.trimIndent())
-        println("Generated build ID: $newBuildId")
+        generateBuildInfoFile(outputFile, true)
     }
 }
+
+// Output directory for final JARs
+val outputDir = layout.buildDirectory.dir("libs")
+val generatedResourcesDir = layout.buildDirectory.dir("generated-resources")
 
 tasks {
     jar {
@@ -83,6 +93,96 @@ tasks {
 
     build {
         dependsOn(shadowJar)
+    }
+}
+
+// ==========================================
+// Debug Build - includes test commands
+// ==========================================
+val generateDebugBuildInfo = tasks.register("generateDebugBuildInfo") {
+    val genDir = generatedResourcesDir.get().dir("debug")
+    val outputFile = genDir.file("build-info.properties").asFile
+    outputs.file(outputFile)
+    outputs.upToDateWhen { false }
+    doLast {
+        genDir.asFile.mkdirs()
+        generateBuildInfoFile(outputFile, true)
+    }
+}
+
+val shadowJarDebug = tasks.register<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJarDebug") {
+    dependsOn(generateDebugBuildInfo, tasks.named("classes"))
+    configurations = listOf(project.configurations.runtimeClasspath.get())
+    archiveClassifier.set("debug")
+    archiveBaseName.set("PlayerWorldManager")
+    destinationDirectory.set(outputDir)
+
+    // First add main source output (which has default build-info.properties)
+    from(sourceSets.main.get().output) {
+        exclude("build-info.properties")
+    }
+    // Then add generated resources with debug build-info.properties
+    from(generatedResourcesDir.map { it.dir("debug") })
+
+    relocate("dev.triumphteam.gui", "tech.bedson.playerworldmanager.libs.gui")
+    relocate("kotlin", "tech.bedson.playerworldmanager.libs.kotlin")
+
+    manifest {
+        attributes["Implementation-Title"] = "PlayerWorldManager (Debug)"
+        attributes["Implementation-Version"] = project.version
+    }
+}
+
+// ==========================================
+// Release Build - excludes test commands
+// ==========================================
+val generateReleaseBuildInfo = tasks.register("generateReleaseBuildInfo") {
+    val genDir = generatedResourcesDir.get().dir("release")
+    val outputFile = genDir.file("build-info.properties").asFile
+    outputs.file(outputFile)
+    outputs.upToDateWhen { false }
+    doLast {
+        genDir.asFile.mkdirs()
+        generateBuildInfoFile(outputFile, false)
+    }
+}
+
+val shadowJarRelease = tasks.register<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJarRelease") {
+    dependsOn(generateReleaseBuildInfo, tasks.named("classes"))
+    configurations = listOf(project.configurations.runtimeClasspath.get())
+    archiveClassifier.set("release")
+    archiveBaseName.set("PlayerWorldManager")
+    destinationDirectory.set(outputDir)
+
+    // First add main source output (exclude default build-info.properties and TestCommands)
+    from(sourceSets.main.get().output) {
+        exclude("build-info.properties")
+        exclude("tech/bedson/playerworldmanager/commands/TestCommands.class")
+        exclude("tech/bedson/playerworldmanager/commands/TestCommands\$*.class")
+    }
+    // Then add generated resources with release build-info.properties
+    from(generatedResourcesDir.map { it.dir("release") })
+
+    relocate("dev.triumphteam.gui", "tech.bedson.playerworldmanager.libs.gui")
+    relocate("kotlin", "tech.bedson.playerworldmanager.libs.kotlin")
+
+    manifest {
+        attributes["Implementation-Title"] = "PlayerWorldManager (Release)"
+        attributes["Implementation-Version"] = project.version
+    }
+}
+
+// ==========================================
+// Combined build task for both JARs
+// ==========================================
+tasks.register("buildAll") {
+    group = "build"
+    description = "Build both debug and release JARs"
+    dependsOn(shadowJarDebug, shadowJarRelease)
+    doLast {
+        println("\nBuild complete! Output JARs:")
+        println("  Debug:   build/libs/PlayerWorldManager-${project.version}-debug.jar")
+        println("  Release: build/libs/PlayerWorldManager-${project.version}-release.jar")
     }
 }
 

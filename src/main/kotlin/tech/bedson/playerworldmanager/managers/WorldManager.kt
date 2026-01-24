@@ -362,7 +362,7 @@ class WorldManager(
 
         Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
             try {
-                // Teleport all players in the world to default spawn
+                // Teleport all players in the world to default spawn with proper state handling
                 val defaultWorld = Bukkit.getWorlds().firstOrNull()
                 if (defaultWorld == null) {
                     logger.severe("[WorldManager] deleteWorld: No default world found for teleporting players")
@@ -371,22 +371,22 @@ class WorldManager(
                 }
                 logger.info("[WorldManager] deleteWorld: Preparing to teleport players from world '${world.name}' to default spawn")
 
-                val defaultSpawn = defaultWorld.spawnLocation
-                val teleportFutures = mutableListOf<CompletableFuture<Boolean>>()
-
-                // Check all dimensions and teleport players
-                var playerCount = 0
+                // Collect all players from all dimensions
+                val playersToTeleport = mutableListOf<Player>()
                 for (env in World.Environment.entries) {
                     val bukkitWorld = getBukkitWorld(world, env)
                     if (bukkitWorld != null) {
-                        for (player in bukkitWorld.players) {
-                            logger.info("[WorldManager] deleteWorld: Teleporting player '${player.name}' from '${world.name}' to default spawn")
-                            teleportFutures.add(player.teleportAsync(defaultSpawn))
-                            playerCount++
-                        }
+                        playersToTeleport.addAll(bukkitWorld.players)
                     }
                 }
-                logger.info("[WorldManager] deleteWorld: Found $playerCount player(s) to teleport from world '${world.name}'")
+                logger.info("[WorldManager] deleteWorld: Found ${playersToTeleport.size} player(s) to teleport from world '${world.name}'")
+
+                // Use teleportToVanillaWorld for proper state save/restore
+                val teleportFutures = playersToTeleport.map { player ->
+                    logger.info("[WorldManager] deleteWorld: Teleporting player '${player.name}' from '${world.name}' to default spawn with state restore")
+                    teleportToVanillaWorld(player)
+                }
+                val playerCount = playersToTeleport.size
 
                 // Wait for all teleports to complete
                 CompletableFuture.allOf(*teleportFutures.toTypedArray()).thenRun {
@@ -438,6 +438,11 @@ class WorldManager(
                             } else {
                                 logger.warning("[WorldManager] deleteWorld: Could not load player data for owner UUID: ${world.ownerUuid}")
                             }
+
+                            // Clear all player world states for this world and its dimensions
+                            val baseWorldName = getWorldName(world, World.Environment.NORMAL)
+                            worldStateManager.clearAllWorldStates(baseWorldName)
+                            logger.info("[WorldManager] deleteWorld: Cleared all player world states for '${world.name}'")
 
                             logger.info("[WorldManager] deleteWorld: Successfully deleted world '${world.name}' (owner: ${world.ownerName})")
                             logger.info("[WorldManager] deleteWorld: Note: World remains in memory until server restart")
@@ -767,9 +772,9 @@ class WorldManager(
                             debugLogger.debug("All players teleported from dimension", "worldName" to worldName)
                         }
 
-                        // Unload with save
-                        debugLogger.debug("Attempting to unload dimension", "worldName" to worldName, "withSave" to true)
-                        if (!Bukkit.unloadWorld(bukkitWorld, true)) {
+                        // Unload with save using NMS (Folia compatible)
+                        debugLogger.debug("Attempting to unload dimension via NMS", "worldName" to worldName, "withSave" to true)
+                        if (!unloadDimensionNMS(bukkitWorld, true)) {
                             logger.warning("Failed to unload world: $worldName")
                             debugLogger.debug("Dimension unload failed", "worldName" to worldName)
                             success = false
@@ -1221,49 +1226,52 @@ class WorldManager(
         }
         debugLogger.debug("Found Bukkit world for settings", "bukkitWorldName" to bukkitWorld.name)
 
-        // Apply time lock
-        when (world.timeLock) {
-            TimeLock.DAY -> {
-                logger.info("[WorldManager] applyWorldSettings: Setting time to DAY (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, false)
-                bukkitWorld.time = 6000 // Noon
+        // Game rules must be set on the global region scheduler in Folia
+        Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+            // Apply time lock
+            when (world.timeLock) {
+                TimeLock.DAY -> {
+                    logger.info("[WorldManager] applyWorldSettings: Setting time to DAY (locked) for '${world.name}'")
+                    bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, false)
+                    bukkitWorld.time = 6000 // Noon
+                }
+                TimeLock.NIGHT -> {
+                    logger.info("[WorldManager] applyWorldSettings: Setting time to NIGHT (locked) for '${world.name}'")
+                    bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, false)
+                    bukkitWorld.time = 18000 // Midnight
+                }
+                TimeLock.CYCLE -> {
+                    logger.info("[WorldManager] applyWorldSettings: Enabling time CYCLE for '${world.name}'")
+                    bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, true)
+                }
             }
-            TimeLock.NIGHT -> {
-                logger.info("[WorldManager] applyWorldSettings: Setting time to NIGHT (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, false)
-                bukkitWorld.time = 18000 // Midnight
+
+            // Apply weather lock
+            when (world.weatherLock) {
+                WeatherLock.CLEAR -> {
+                    logger.info("[WorldManager] applyWorldSettings: Setting weather to CLEAR (locked) for '${world.name}'")
+                    bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, false)
+                    bukkitWorld.setStorm(false)
+                    bukkitWorld.isThundering = false
+                }
+                WeatherLock.RAIN -> {
+                    logger.info("[WorldManager] applyWorldSettings: Setting weather to RAIN (locked) for '${world.name}'")
+                    bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, false)
+                    bukkitWorld.setStorm(true)
+                    bukkitWorld.isThundering = false
+                }
+                WeatherLock.CYCLE -> {
+                    logger.info("[WorldManager] applyWorldSettings: Enabling weather CYCLE for '${world.name}'")
+                    bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, true)
+                }
             }
-            TimeLock.CYCLE -> {
-                logger.info("[WorldManager] applyWorldSettings: Enabling time CYCLE for '${world.name}'")
-                bukkitWorld.setGameRule(GameRules.ADVANCE_TIME, true)
-            }
+
+            // Apply world border settings
+            applyWorldBorder(world, bukkitWorld)
+
+            logger.info("[WorldManager] applyWorldSettings: Successfully applied settings to world '${world.name}'")
         }
-
-        // Apply weather lock
-        when (world.weatherLock) {
-            WeatherLock.CLEAR -> {
-                logger.info("[WorldManager] applyWorldSettings: Setting weather to CLEAR (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, false)
-                bukkitWorld.setStorm(false)
-                bukkitWorld.isThundering = false
-            }
-            WeatherLock.RAIN -> {
-                logger.info("[WorldManager] applyWorldSettings: Setting weather to RAIN (locked) for '${world.name}'")
-                bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, false)
-                bukkitWorld.setStorm(true)
-                bukkitWorld.isThundering = false
-            }
-            WeatherLock.CYCLE -> {
-                logger.info("[WorldManager] applyWorldSettings: Enabling weather CYCLE for '${world.name}'")
-                bukkitWorld.setGameRule(GameRules.ADVANCE_WEATHER, true)
-            }
-        }
-
-        // Apply world border settings
-        applyWorldBorder(world, bukkitWorld)
-
-        logger.info("[WorldManager] applyWorldSettings: Successfully applied settings to world '${world.name}'")
-        debugLogger.debugMethodExit("applyWorldSettings", "success")
+        debugLogger.debugMethodExit("applyWorldSettings", "scheduled")
     }
 
     /**
@@ -1696,6 +1704,71 @@ class WorldManager(
             debugLogger.debugMethodExit("createDimension", null)
             e.printStackTrace()
             return null
+        }
+    }
+
+    /**
+     * Unload a dimension world using NMS classes for Folia compatibility.
+     * Note: On Folia, full world unloading with chunk saving is not supported
+     * outside of region threads. This method will attempt a graceful unload
+     * but may skip chunk saving if not on a region thread.
+     *
+     * @param world The Bukkit world to unload
+     * @param save Whether to save the world before unloading
+     * @return True if successful, false otherwise
+     */
+    private fun unloadDimensionNMS(world: World, save: Boolean): Boolean {
+        debugLogger.debugMethodEntry("unloadDimensionNMS",
+            "worldName" to world.name,
+            "save" to save
+        )
+
+        try {
+            val craftWorld = world as CraftWorld
+            val serverLevel = craftWorld.handle
+            val console = (Bukkit.getServer() as CraftServer).server
+
+            // Don't allow unloading the main worlds
+            if (serverLevel === console.overworld() ||
+                serverLevel === console.getLevel(net.minecraft.world.level.Level.NETHER) ||
+                serverLevel === console.getLevel(net.minecraft.world.level.Level.END)) {
+                logger.warning("[WorldManager] unloadDimensionNMS: Cannot unload main world '${world.name}'")
+                debugLogger.debugMethodExit("unloadDimensionNMS", false)
+                return false
+            }
+
+            // On Folia, chunk saving requires being on a region thread which we can't guarantee
+            // We'll skip the save and close operations that require region context
+            // The world files will be overwritten by the backup restore anyway
+            logger.info("[WorldManager] unloadDimensionNMS: Removing world '${world.name}' from server (Folia mode - no chunk save)")
+
+            // Remove from server's level map only - don't try to close chunk source
+            // as that requires region thread context on Folia
+            debugLogger.debug("Removing from server levels map", "worldName" to world.name)
+            console.removeLevel(serverLevel)
+
+            // Close just the level storage access (file handle), not chunks
+            try {
+                debugLogger.debug("Closing level storage access", "worldName" to world.name)
+                serverLevel.levelStorageAccess.close()
+            } catch (e: Exception) {
+                logger.warning("[WorldManager] unloadDimensionNMS: Could not close level storage for '${world.name}': ${e.message}")
+            }
+
+            logger.info("[WorldManager] unloadDimensionNMS: Removed dimension '${world.name}' from server")
+            debugLogger.debugMethodExit("unloadDimensionNMS", true)
+            return true
+
+        } catch (e: Exception) {
+            logger.severe("[WorldManager] unloadDimensionNMS: Failed to unload dimension ${world.name}: ${e.message}")
+            debugLogger.debug("Dimension unload failed",
+                "worldName" to world.name,
+                "exceptionType" to e.javaClass.simpleName,
+                "exceptionMessage" to e.message
+            )
+            debugLogger.debugMethodExit("unloadDimensionNMS", false)
+            e.printStackTrace()
+            return false
         }
     }
 

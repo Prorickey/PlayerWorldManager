@@ -341,7 +341,7 @@ class WorldManageGui(
     private fun createWorldBorderItem(player: Player, world: PlayerWorld): GuiItem {
         debugLogger.debugMethodEntry("createWorldBorderItem", "player" to player.name, "worldName" to world.name)
         val settings = world.worldBorder
-        val sizeDisplay = if (settings.size >= 60000000) "Unlimited" else "${settings.size.toLong()}"
+        val sizeDisplay = if (settings.size >= 59999968) "Unlimited" else "${settings.size.toLong()}"
 
         val item = ItemBuilder.from(Material.STRUCTURE_VOID)
             .name(Component.text("World Border", NamedTextColor.AQUA))
@@ -360,7 +360,11 @@ class WorldManageGui(
                 player.closeInventory()
                 player.scheduler.run(plugin, { _ ->
                     debugLogger.debug("Opening WorldBorderGui", "player" to player.name, "worldName" to world.name)
-                    WorldBorderGui(plugin, worldManager, inviteManager, dataManager).open(player, world)
+                    if (inviteManager != null) {
+                        WorldBorderGui(plugin, worldManager, inviteManager, dataManager).open(player, world)
+                    } else {
+                        player.sendMessage(Component.text("World border settings unavailable.", NamedTextColor.RED))
+                    }
                 }, null)
             }
         debugLogger.debugMethodExit("createWorldBorderItem")
@@ -486,7 +490,7 @@ class WorldManageGui(
                 event.isCancelled = true
                 debugLogger.debug("Stats button clicked", "player" to player.name, "worldName" to world.name)
                 player.closeInventory()
-                if (statsManager != null) {
+                if (statsManager != null && inviteManager != null) {
                     player.scheduler.run(plugin, { _ ->
                         WorldStatsGui(plugin, statsManager, worldManager, inviteManager, dataManager).open(player, world)
                     }, null)
@@ -545,7 +549,9 @@ class WorldManageGui(
                 player.closeInventory()
                 player.scheduler.run(plugin, { _ ->
                     debugLogger.debug("Opening MainMenuGui", "player" to player.name)
-                    MainMenuGui(plugin, worldManager, inviteManager, dataManager).open(player)
+                    if (inviteManager != null) {
+                        MainMenuGui(plugin, worldManager, inviteManager, dataManager).open(player)
+                    }
                 }, null)
             }
         debugLogger.debugMethodExit("createBackItem")

@@ -6,6 +6,8 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A powerful Minecraft plugin that allows players to create and manage their own private worlds, invite friends, and control chat visibility. Built with **Folia's regionized multithreading** for optimal performance on large servers.
+You may notice that this plugin was heavily developed using Claude, and this is true. This plugin was developed as quickly as possible for a Minecraft server I run for my school, and I wanted to add functionality for different friend groups to create worlds and play together without fear of interference with others who wanted to destroy things. This project sapwned as 
+a result of me being a nerd and wanting to refine my skills in using AI to code. 
 
 ## Features
 

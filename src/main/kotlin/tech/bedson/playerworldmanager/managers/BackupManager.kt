@@ -121,7 +121,7 @@ class BackupManager(
 
                 // Get the world folder (main overworld)
                 val worldFolderName = "${world.ownerName}_${world.name}"
-                val worldFolder = File(Bukkit.getServer().worldContainer, "worlds/$worldFolderName")
+                val worldFolder = File(Bukkit.getServer().worldContainer, worldFolderName)
 
                 if (!worldFolder.exists()) {
                     debugLogger.debug("World folder not found", "path" to worldFolder.absolutePath)
@@ -142,14 +142,14 @@ class BackupManager(
                 copyDirectory(worldFolder, backupDestination)
 
                 // Also backup nether and end dimensions if they exist
-                val netherFolder = File(Bukkit.getServer().worldContainer, "worlds/${worldFolderName}_nether")
+                val netherFolder = File(Bukkit.getServer().worldContainer, "${worldFolderName}_nether")
                 if (netherFolder.exists()) {
                     val netherBackup = File(backupsDataFolder, "${backupFolderName}_nether")
                     copyDirectory(netherFolder, netherBackup)
                     debugLogger.debug("Copied nether dimension")
                 }
 
-                val endFolder = File(Bukkit.getServer().worldContainer, "worlds/${worldFolderName}_the_end")
+                val endFolder = File(Bukkit.getServer().worldContainer, "${worldFolderName}_the_end")
                 if (endFolder.exists()) {
                     val endBackup = File(backupsDataFolder, "${backupFolderName}_the_end")
                     copyDirectory(endFolder, endBackup)
@@ -230,18 +230,19 @@ class BackupManager(
 
                 // Get world folders
                 val worldFolderName = "${world.ownerName}_${world.name}"
-                val worldFolder = File(Bukkit.getServer().worldContainer, "worlds/$worldFolderName")
+                val worldFolder = File(Bukkit.getServer().worldContainer, worldFolderName)
 
                 debugLogger.debug("Restoring backup",
                     "source" to backupSource.absolutePath,
                     "destination" to worldFolder.absolutePath
                 )
 
-                // Kick all players from the world before restoring and track them
+                // Unload and restore the world using NMS
                 Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
                     val bukkitWorld = Bukkit.getWorld(worldFolderName)
                     val affectedPlayers = bukkitWorld?.players?.map { it.uniqueId } ?: emptyList()
 
+                    // Move all players out of the world first
                     bukkitWorld?.players?.forEach { player ->
                         player.sendMessage(net.kyori.adventure.text.Component.text(
                             "World is being restored from backup. You have been moved to spawn.",
@@ -250,76 +251,107 @@ class BackupManager(
                         worldManager.teleportToVanillaWorld(player)
                     }
 
-                    // Continue restoration after players are moved
-                    Bukkit.getAsyncScheduler().runDelayed(plugin, { _ ->
-                        try {
-                            // Delete existing world folder and restore from backup
-                            if (worldFolder.exists()) {
-                                deleteDirectory(worldFolder)
-                            }
-                            copyDirectory(backupSource, worldFolder)
+                    // Unload all dimensions of the world using NMS
+                    debugLogger.debug("Unloading world for backup restore", "worldName" to world.name)
+                    val unloadFuture = worldManager.unloadWorld(world)
 
-                            // Restore nether if backup exists
-                            val netherBackup = File(backupsDataFolder, "${backupFolderName}_nether")
-                            if (netherBackup.exists()) {
-                                val netherFolder = File(Bukkit.getServer().worldContainer, "worlds/${worldFolderName}_nether")
-                                if (netherFolder.exists()) {
-                                    deleteDirectory(netherFolder)
-                                }
-                                copyDirectory(netherBackup, netherFolder)
-                                debugLogger.debug("Restored nether dimension")
-                            }
-
-                            // Restore end if backup exists
-                            val endBackup = File(backupsDataFolder, "${backupFolderName}_the_end")
-                            if (endBackup.exists()) {
-                                val endFolder = File(Bukkit.getServer().worldContainer, "worlds/${worldFolderName}_the_end")
-                                if (endFolder.exists()) {
-                                    deleteDirectory(endFolder)
-                                }
-                                copyDirectory(endBackup, endFolder)
-                                debugLogger.debug("Restored end dimension")
-                            }
-
-                            logger.info("[BackupManager] Restored world '${world.name}' from backup ${backup.id}")
-
-                            // Notify affected players of successful restoration
-                            Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
-                                affectedPlayers.forEach { playerId ->
-                                    Bukkit.getPlayer(playerId)?.sendMessage(
-                                        net.kyori.adventure.text.Component.text(
-                                            "World '${world.name}' has been restored successfully. You can now return.",
-                                            net.kyori.adventure.text.format.NamedTextColor.GREEN
-                                        )
-                                    )
-                                }
-                            }
-
-                            debugLogger.debugMethodExit("restoreBackup", "success")
-                            future.complete(Result.success(Unit))
-
-                        } catch (e: Exception) {
-                            logger.severe("[BackupManager] Failed to restore backup: ${e.message}")
-                            debugLogger.debug("Backup restoration failed after moving players",
-                                "error" to e.message,
-                                "affectedPlayers" to affectedPlayers.size
-                            )
-
-                            // Notify affected players of failure
-                            Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
-                                affectedPlayers.forEach { playerId ->
-                                    Bukkit.getPlayer(playerId)?.sendMessage(
-                                        net.kyori.adventure.text.Component.text(
-                                            "Failed to restore world '${world.name}'. The world may be in an inconsistent state. Please contact an administrator.",
-                                            net.kyori.adventure.text.format.NamedTextColor.RED
-                                        )
-                                    )
-                                }
-                            }
-
-                            future.complete(Result.failure(e))
+                    unloadFuture.thenAccept { unloadSuccess ->
+                        if (!unloadSuccess) {
+                            logger.warning("[BackupManager] Failed to unload world for restore, attempting file copy anyway")
                         }
-                    }, 2, TimeUnit.SECONDS)
+
+                        // Continue with file operations asynchronously
+                        Bukkit.getAsyncScheduler().runNow(plugin) { _ ->
+                            try {
+                                // Delete existing world folders and restore from backup
+                                if (worldFolder.exists()) {
+                                    deleteDirectory(worldFolder)
+                                }
+                                copyDirectory(backupSource, worldFolder)
+
+                                // Restore nether if backup exists
+                                val netherBackup = File(backupsDataFolder, "${backupFolderName}_nether")
+                                if (netherBackup.exists()) {
+                                    val netherFolder = File(Bukkit.getServer().worldContainer, "${worldFolderName}_nether")
+                                    if (netherFolder.exists()) {
+                                        deleteDirectory(netherFolder)
+                                    }
+                                    copyDirectory(netherBackup, netherFolder)
+                                    debugLogger.debug("Restored nether dimension")
+                                }
+
+                                // Restore end if backup exists
+                                val endBackup = File(backupsDataFolder, "${backupFolderName}_the_end")
+                                if (endBackup.exists()) {
+                                    val endFolder = File(Bukkit.getServer().worldContainer, "${worldFolderName}_the_end")
+                                    if (endFolder.exists()) {
+                                        deleteDirectory(endFolder)
+                                    }
+                                    copyDirectory(endBackup, endFolder)
+                                    debugLogger.debug("Restored end dimension")
+                                }
+
+                                logger.info("[BackupManager] Backup files restored for world '${world.name}'")
+
+                                // Reload the world using NMS
+                                Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+                                    debugLogger.debug("Reloading world after backup restore", "worldName" to world.name)
+                                    val reloadFuture = worldManager.loadWorld(world)
+
+                                    reloadFuture.thenAccept { reloadSuccess ->
+                                        if (reloadSuccess) {
+                                            logger.info("[BackupManager] Successfully restored and reloaded world '${world.name}' from backup ${backup.id}")
+
+                                            // Notify affected players
+                                            affectedPlayers.forEach { playerId ->
+                                                Bukkit.getPlayer(playerId)?.sendMessage(
+                                                    net.kyori.adventure.text.Component.text(
+                                                        "World '${world.name}' has been restored successfully! You can now return.",
+                                                        net.kyori.adventure.text.format.NamedTextColor.GREEN
+                                                    )
+                                                )
+                                            }
+
+                                            debugLogger.debugMethodExit("restoreBackup", "success")
+                                            future.complete(Result.success(Unit))
+                                        } else {
+                                            logger.severe("[BackupManager] Failed to reload world after restore")
+                                            affectedPlayers.forEach { playerId ->
+                                                Bukkit.getPlayer(playerId)?.sendMessage(
+                                                    net.kyori.adventure.text.Component.text(
+                                                        "World '${world.name}' files restored but reload failed. Try /world tp ${world.name} or restart server.",
+                                                        net.kyori.adventure.text.format.NamedTextColor.YELLOW
+                                                    )
+                                                )
+                                            }
+                                            future.complete(Result.success(Unit)) // Files were restored
+                                        }
+                                    }
+                                }
+
+                            } catch (e: Exception) {
+                                logger.severe("[BackupManager] Failed to restore backup: ${e.message}")
+                                debugLogger.debug("Backup restoration failed",
+                                    "error" to e.message,
+                                    "affectedPlayers" to affectedPlayers.size
+                                )
+
+                                // Notify affected players of failure
+                                Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+                                    affectedPlayers.forEach { playerId ->
+                                        Bukkit.getPlayer(playerId)?.sendMessage(
+                                            net.kyori.adventure.text.Component.text(
+                                                "Failed to restore world '${world.name}'. Please contact an administrator.",
+                                                net.kyori.adventure.text.format.NamedTextColor.RED
+                                            )
+                                        )
+                                    }
+                                }
+
+                                future.complete(Result.failure(e))
+                            }
+                        }
+                    }
                 }
 
             } catch (e: Exception) {

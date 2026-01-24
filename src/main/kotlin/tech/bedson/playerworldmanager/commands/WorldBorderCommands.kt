@@ -52,7 +52,7 @@ class WorldBorderCommands(
 
             // /worldborder set <size> [time] [world] - Set border size
             .then(Commands.literal("set")
-                .then(Commands.argument("size", DoubleArgumentType.doubleArg(1.0, 60000000.0))
+                .then(Commands.argument("size", DoubleArgumentType.doubleArg(1.0, 59999968.0))
                     .then(Commands.argument("time", IntegerArgumentType.integer(0))
                         .then(Commands.argument("world", StringArgumentType.word())
                             .suggests(::suggestOwnedWorlds)
@@ -70,7 +70,7 @@ class WorldBorderCommands(
 
             // /worldborder add <size> [time] [world] - Add to border size
             .then(Commands.literal("add")
-                .then(Commands.argument("size", DoubleArgumentType.doubleArg(-60000000.0, 60000000.0))
+                .then(Commands.argument("size", DoubleArgumentType.doubleArg(-59999968.0, 59999968.0))
                     .then(Commands.argument("time", IntegerArgumentType.integer(0))
                         .then(Commands.argument("world", StringArgumentType.word())
                             .suggests(::suggestOwnedWorlds)
@@ -396,7 +396,7 @@ class WorldBorderCommands(
         val world = requireOwnedWorld(player, null) ?: return Command.SINGLE_SUCCESS
         val amount = DoubleArgumentType.getDouble(ctx, "size")
 
-        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 60000000.0)
+        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 59999968.0)
         world.worldBorder.size = newSize
         dataManager.saveWorld(world)
         applyWorldBorder(world)
@@ -416,7 +416,7 @@ class WorldBorderCommands(
         val world = requireOwnedWorld(player, worldName) ?: return Command.SINGLE_SUCCESS
         val amount = DoubleArgumentType.getDouble(ctx, "size")
 
-        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 60000000.0)
+        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 59999968.0)
         world.worldBorder.size = newSize
         dataManager.saveWorld(world)
         applyWorldBorder(world)
@@ -438,7 +438,7 @@ class WorldBorderCommands(
         val amount = DoubleArgumentType.getDouble(ctx, "size")
         val time = IntegerArgumentType.getInteger(ctx, "time")
 
-        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 60000000.0)
+        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 59999968.0)
         world.worldBorder.size = newSize
         dataManager.saveWorld(world)
         applyWorldBorderWithTransition(world, newSize, time)
@@ -470,7 +470,7 @@ class WorldBorderCommands(
         val amount = DoubleArgumentType.getDouble(ctx, "size")
         val time = IntegerArgumentType.getInteger(ctx, "time")
 
-        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 60000000.0)
+        val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 59999968.0)
         world.worldBorder.size = newSize
         dataManager.saveWorld(world)
         applyWorldBorderWithTransition(world, newSize, time)

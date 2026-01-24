@@ -97,12 +97,12 @@ class BackupGui(
     private fun openPaginatedGui(player: Player, world: PlayerWorld, backups: List<WorldBackup>) {
         debugLogger.debug("Opening paginated GUI", "backupCount" to backups.size)
 
-        val gui = PaginatedGui.Builder()
+        val gui = Gui.paginated()
             .title(Component.text("Backups: ${world.name}", NamedTextColor.GOLD))
             .rows(5)
             .pageSize(27)
             .disableAllInteractions()
-            .build()
+            .create()
 
         // Navigation row (bottom)
         gui.setItem(36, createBackItem(player, world))
@@ -356,8 +356,10 @@ class BackupGui(
                 pendingDeletes.remove(player.uniqueId)
                 player.closeInventory()
                 player.scheduler.run(plugin, { _ ->
-                    val inviteManager = (plugin as? PlayerWorldManager)?.getInviteManager()
-                    WorldManageGui(plugin, worldManager, inviteManager, dataManager, backupManager)
+                    val pwm = plugin as? PlayerWorldManager
+                    val inviteManager = pwm?.getInviteManager()
+                    val statsManager = pwm?.getStatsManager()
+                    WorldManageGui(plugin, worldManager, inviteManager, dataManager, statsManager, backupManager)
                         .open(player, world)
                 }, null)
             }

@@ -6,7 +6,6 @@ import org.bukkit.craftbukkit.CraftServer
 import org.bukkit.plugin.java.JavaPlugin
 import tech.bedson.playerworldmanager.commands.ChatCommands
 import tech.bedson.playerworldmanager.commands.StatsCommands
-import tech.bedson.playerworldmanager.commands.TestCommands
 import tech.bedson.playerworldmanager.commands.WorldAdminCommands
 import tech.bedson.playerworldmanager.commands.WorldBorderCommands
 import tech.bedson.playerworldmanager.commands.WorldCommands
@@ -43,6 +42,8 @@ class PlayerWorldManager : JavaPlugin() {
         var buildTime: String = "unknown"
             private set
         var buildVersion: String = "unknown"
+            private set
+        var isDebugBuild: Boolean = false
             private set
     }
 
@@ -196,7 +197,9 @@ class PlayerWorldManager : JavaPlugin() {
                 buildId = props.getProperty("build.id", "unknown")
                 buildTime = props.getProperty("build.time", "unknown")
                 buildVersion = props.getProperty("build.version", "unknown")
-                logger.info("Build info loaded: ID=$buildId, Time=$buildTime, Version=$buildVersion")
+                isDebugBuild = props.getProperty("build.debug", "false").toBoolean()
+                val buildType = if (isDebugBuild) "DEBUG" else "RELEASE"
+                logger.info("Build info loaded: ID=$buildId, Type=$buildType, Version=$buildVersion")
             } else {
                 logger.warning("build-info.properties not found in JAR")
             }
@@ -322,15 +325,36 @@ class PlayerWorldManager : JavaPlugin() {
             )
             debugLogger.debug("StatsCommands registered")
 
-            // Console test commands (for LLM/automated testing)
-            debugLogger.debug("Registering TestCommands (/pwmtest, /pwmt)...")
-            val testCommands = TestCommands(this, worldManager, inviteManager, dataManager)
-            registrar.register(
-                testCommands.build(),
-                "Console test commands for automated testing",
-                listOf("pwmt")
-            )
-            debugLogger.debug("TestCommands registered")
+            // Console test commands (for LLM/automated testing) - only in debug builds
+            if (isDebugBuild) {
+                try {
+                    debugLogger.debug("Debug build detected, registering TestCommands (/pwmtest, /pwmt)...")
+                    val testCommandsClass = Class.forName("tech.bedson.playerworldmanager.commands.TestCommands")
+                    val constructor = testCommandsClass.getConstructor(
+                        org.bukkit.plugin.java.JavaPlugin::class.java,
+                        tech.bedson.playerworldmanager.managers.WorldManager::class.java,
+                        tech.bedson.playerworldmanager.managers.InviteManager::class.java,
+                        tech.bedson.playerworldmanager.managers.DataManager::class.java
+                    )
+                    val testCommands = constructor.newInstance(this, worldManager, inviteManager, dataManager)
+                    val buildMethod = testCommandsClass.getMethod("build")
+                    @Suppress("UNCHECKED_CAST")
+                    val commandNode = buildMethod.invoke(testCommands) as com.mojang.brigadier.tree.LiteralCommandNode<io.papermc.paper.command.brigadier.CommandSourceStack>
+                    registrar.register(
+                        commandNode,
+                        "Console test commands for automated testing",
+                        listOf("pwmt")
+                    )
+                    debugLogger.debug("TestCommands registered successfully")
+                } catch (e: ClassNotFoundException) {
+                    debugLogger.debug("TestCommands class not found (release build)")
+                } catch (e: Exception) {
+                    logger.warning("Failed to register TestCommands: ${e.message}")
+                    debugLogger.debug("TestCommands registration failed", "error" to e.message)
+                }
+            } else {
+                debugLogger.debug("Release build - TestCommands not registered")
+            }
 
             logger.info("Brigadier commands registered!")
         }

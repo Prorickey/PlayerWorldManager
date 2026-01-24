@@ -152,10 +152,10 @@ class WorldStateManager(
 
         // Restore inventory
         debugLogger.debug("Restoring inventory")
-        player.inventory.contents = deserializeInventory(state.inventoryContents)
-        player.inventory.armorContents = deserializeInventory(state.armorContents)
+        player.inventory.contents = deserializeInventory(state.inventoryContents, 36)
+        player.inventory.armorContents = deserializeArmor(state.armorContents)
         player.inventory.setItemInOffHand(deserializeItem(state.offHandItem))
-        player.enderChest.contents = deserializeInventory(state.enderChestContents)
+        player.enderChest.contents = deserializeInventory(state.enderChestContents, 27)
 
         // Restore health (set max first to avoid clamping)
         debugLogger.debug("Restoring health", "maxHealth" to state.maxHealth, "health" to state.health)
@@ -283,6 +283,51 @@ class WorldStateManager(
         return location
     }
 
+    /**
+     * Clear all player world states for a specific world.
+     * Called when a world is deleted to prevent stale data from persisting.
+     *
+     * @param worldName The Bukkit world name (e.g., "prodeathmaster_test")
+     */
+    fun clearWorldStatesForWorld(worldName: String) {
+        debugLogger.debugMethodEntry("clearWorldStatesForWorld", "worldName" to worldName)
+        logger.info("[WorldStateManager] Clearing all player states for world '$worldName'")
+
+        var clearedCount = 0
+        val allPlayerData = dataManager.getAllPlayerData()
+
+        for (playerData in allPlayerData) {
+            if (playerData.worldStates.containsKey(worldName)) {
+                playerData.worldStates.remove(worldName)
+                dataManager.savePlayerData(playerData)
+                clearedCount++
+                debugLogger.debug("Cleared world state",
+                    "player" to playerData.username,
+                    "worldName" to worldName
+                )
+            }
+        }
+
+        logger.info("[WorldStateManager] Cleared $clearedCount player state(s) for world '$worldName'")
+        debugLogger.debugMethodExit("clearWorldStatesForWorld", "clearedCount" to clearedCount)
+    }
+
+    /**
+     * Clear all player world states for a world and its dimensions (nether, end).
+     *
+     * @param baseWorldName The base world name (e.g., "prodeathmaster_test")
+     */
+    fun clearAllWorldStates(baseWorldName: String) {
+        debugLogger.debugMethodEntry("clearAllWorldStates", "baseWorldName" to baseWorldName)
+
+        // Clear overworld, nether, and end dimension states
+        clearWorldStatesForWorld(baseWorldName)
+        clearWorldStatesForWorld("${baseWorldName}_nether")
+        clearWorldStatesForWorld("${baseWorldName}_the_end")
+
+        debugLogger.debugMethodExit("clearAllWorldStates")
+    }
+
     // ========================
     // Serialization Helpers
     // ========================
@@ -313,19 +358,52 @@ class WorldStateManager(
     /**
      * Deserialize an inventory array from Base64.
      */
-    private fun deserializeInventory(base64: String?): Array<ItemStack?> {
+    private fun deserializeInventory(base64: String?, expectedSize: Int = 36): Array<ItemStack?> {
         if (base64 == null) {
-            return arrayOfNulls(36)  // Default empty inventory
+            return arrayOfNulls(expectedSize)
         }
 
         return try {
             val bytes = Base64.getDecoder().decode(base64)
-            // Cast to nullable array since inventory slots can be empty
             @Suppress("UNCHECKED_CAST")
-            ItemStack.deserializeItemsFromBytes(bytes) as Array<ItemStack?>
+            val items = ItemStack.deserializeItemsFromBytes(bytes) as Array<ItemStack?>
+            // Ensure we return exactly the expected size
+            when {
+                items.size == expectedSize -> items
+                items.size > expectedSize -> items.copyOfRange(0, expectedSize)
+                else -> Array(expectedSize) { index -> items.getOrNull(index) }
+            }
         } catch (e: Exception) {
             logger.warning("[WorldStateManager] Failed to deserialize inventory: ${e.message}")
-            arrayOfNulls(36)
+            arrayOfNulls(expectedSize)
+        }
+    }
+
+    /**
+     * Deserialize armor contents from Base64.
+     * Returns exactly 4 items (boots, leggings, chestplate, helmet).
+     */
+    private fun deserializeArmor(base64: String?): Array<ItemStack?> {
+        if (base64 == null) {
+            return arrayOfNulls(4)  // Default empty armor
+        }
+
+        return try {
+            val bytes = Base64.getDecoder().decode(base64)
+            @Suppress("UNCHECKED_CAST")
+            val items = ItemStack.deserializeItemsFromBytes(bytes) as Array<ItemStack?>
+            // Ensure we return exactly 4 items for armor
+            if (items.size == 4) {
+                items
+            } else if (items.size > 4) {
+                items.copyOfRange(0, 4)
+            } else {
+                // Pad with nulls if less than 4
+                Array(4) { index -> items.getOrNull(index) }
+            }
+        } catch (e: Exception) {
+            logger.warning("[WorldStateManager] Failed to deserialize armor: ${e.message}")
+            arrayOfNulls(4)
         }
     }
 

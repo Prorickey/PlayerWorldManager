@@ -54,7 +54,7 @@ class WorldBorderGui(
         gui.setItem(22, createPresetItem(player, world, 100.0, "Small"))
         gui.setItem(23, createPresetItem(player, world, 500.0, "Medium"))
         gui.setItem(24, createPresetItem(player, world, 2000.0, "Large"))
-        gui.setItem(25, createPresetItem(player, world, 60000000.0, "Unlimited"))
+        gui.setItem(25, createPresetItem(player, world, 59999968.0, "Unlimited"))
 
         // Row 3: Damage and warning settings
         gui.setItem(28, createDamageAmountItem(player, world))
@@ -80,7 +80,7 @@ class WorldBorderGui(
     }
 
     private fun applyWorldBorder(world: PlayerWorld) {
-        val bukkitWorld = Bukkit.getWorld(world.name) ?: return
+        val bukkitWorld = worldManager.getBukkitWorld(world) ?: return
         val border = bukkitWorld.worldBorder
         val settings = world.worldBorder
 
@@ -121,7 +121,7 @@ class WorldBorderGui(
             ))
             .asGuiItem { event ->
                 event.isCancelled = true
-                val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 60000000.0)
+                val newSize = (world.worldBorder.size + amount).coerceIn(1.0, 59999968.0)
                 world.worldBorder.size = newSize
                 dataManager.saveWorld(world)
                 applyWorldBorder(world)
@@ -149,7 +149,7 @@ class WorldBorderGui(
             ))
             .asGuiItem { event ->
                 event.isCancelled = true
-                val newSize = (world.worldBorder.size - amount).coerceIn(1.0, 60000000.0)
+                val newSize = (world.worldBorder.size - amount).coerceIn(1.0, 59999968.0)
                 world.worldBorder.size = newSize
                 dataManager.saveWorld(world)
                 applyWorldBorder(world)
@@ -214,7 +214,7 @@ class WorldBorderGui(
             else -> Material.CHAINMAIL_CHESTPLATE
         }
 
-        val sizeDisplay = if (size >= 60000000) "Unlimited" else "${size.toLong()}"
+        val sizeDisplay = if (size >= 59999968) "Unlimited" else "${size.toLong()}"
 
         return ItemBuilder.from(material)
             .name(Component.text("$name Preset", NamedTextColor.AQUA).decoration(TextDecoration.ITALIC, false))
