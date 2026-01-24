@@ -9,6 +9,8 @@ import tech.bedson.playerworldmanager.models.WorldInvite
 import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.io.File
 import java.util.UUID
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import java.util.logging.Logger
 
 /**
@@ -30,10 +32,10 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
     private val playersFolder = File(dataFolder, "players")
     private val invitesFile = File(dataFolder, "invites.json")
 
-    // In-memory caches
-    private val worlds = mutableMapOf<UUID, PlayerWorld>()
-    private val playerData = mutableMapOf<UUID, PlayerData>()
-    private val invites = mutableListOf<WorldInvite>()
+    // In-memory caches (thread-safe for Folia's multi-threaded environment)
+    private val worlds = ConcurrentHashMap<UUID, PlayerWorld>()
+    private val playerData = ConcurrentHashMap<UUID, PlayerData>()
+    private val invites: MutableList<WorldInvite> = Collections.synchronizedList(mutableListOf())
 
     init {
         // Create directories if they don't exist
@@ -55,7 +57,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             "worldId" to world.id,
             "ownerName" to world.ownerName
         )
-        logger.info("[DataManager] saveWorld: Saving world '${world.name}' (ID: ${world.id}, Owner: ${world.ownerName})")
         worlds[world.id] = world
         debugLogger.debug("Added world to cache", "cacheSize" to worlds.size)
         val file = File(worldsFolder, "${world.id}.json")
@@ -64,10 +65,9 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             val json = gson.toJson(world)
             debugLogger.debug("Serialized world to JSON", "jsonLength" to json.length)
             file.writeText(json)
-            logger.info("[DataManager] saveWorld: Successfully saved world '${world.name}' to ${file.path}")
             debugLogger.debugMethodExit("saveWorld", "success")
         } catch (e: Exception) {
-            logger.severe("[DataManager] saveWorld: Failed to save world ${world.name} (${world.id}): ${e.message}")
+            logger.severe("[DataManager] Failed to save world ${world.name} (${world.id}): ${e.message}")
             debugLogger.debug("Failed to save world",
                 "exceptionType" to e.javaClass.simpleName,
                 "exceptionMessage" to e.message
@@ -82,10 +82,8 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun loadWorld(worldId: UUID): PlayerWorld? {
         debugLogger.debugMethodEntry("loadWorld", "worldId" to worldId)
-        logger.info("[DataManager] loadWorld: Loading world by ID: $worldId")
         // Check cache first
         worlds[worldId]?.let {
-            logger.info("[DataManager] loadWorld: Found world '${it.name}' in cache")
             debugLogger.debug("Cache hit", "worldName" to it.name, "worldId" to it.id)
             debugLogger.debugMethodExit("loadWorld", it.name)
             return it
@@ -96,7 +94,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
         val file = File(worldsFolder, "$worldId.json")
         debugLogger.debug("Checking file existence", "filePath" to file.absolutePath, "exists" to file.exists())
         if (!file.exists()) {
-            logger.info("[DataManager] loadWorld: World file not found for ID: $worldId")
             debugLogger.debugMethodExit("loadWorld", null)
             return null
         }
@@ -107,11 +104,10 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             val world = gson.fromJson(json, PlayerWorld::class.java)
             worlds[worldId] = world
             debugLogger.debug("Deserialized and cached world", "worldName" to world.name)
-            logger.info("[DataManager] loadWorld: Successfully loaded world '${world.name}' from disk")
             debugLogger.debugMethodExit("loadWorld", world.name)
             world
         } catch (e: Exception) {
-            logger.severe("[DataManager] loadWorld: Failed to load world $worldId: ${e.message}")
+            logger.severe("[DataManager] Failed to load world $worldId: ${e.message}")
             debugLogger.debug("Failed to load world",
                 "exceptionType" to e.javaClass.simpleName,
                 "exceptionMessage" to e.message
@@ -127,18 +123,15 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun loadWorldByName(name: String): PlayerWorld? {
         debugLogger.debugMethodEntry("loadWorldByName", "name" to name)
-        logger.info("[DataManager] loadWorldByName: Searching for world with name: $name")
         // Check cache first
         debugLogger.debug("Checking cache", "cacheSize" to worlds.size)
         worlds.values.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let {
-            logger.info("[DataManager] loadWorldByName: Found world '$name' in cache (ID: ${it.id})")
             debugLogger.debug("Cache hit", "worldId" to it.id)
             debugLogger.debugMethodExit("loadWorldByName", it.name)
             return it
         }
         debugLogger.debug("Cache miss, searching disk files")
 
-        logger.info("[DataManager] loadWorldByName: World not in cache, searching disk files")
         // Load all worlds from disk if not in cache
         val files = worldsFolder.listFiles()
         debugLogger.debug("Scanning world folder", "fileCount" to (files?.size ?: 0))
@@ -149,19 +142,17 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
                     val world = gson.fromJson(file.readText(), PlayerWorld::class.java)
                     worlds[world.id] = world
                     if (world.name.equals(name, ignoreCase = true)) {
-                        logger.info("[DataManager] loadWorldByName: Found world '$name' on disk (ID: ${world.id})")
                         debugLogger.debug("Found matching world", "worldId" to world.id)
                         debugLogger.debugMethodExit("loadWorldByName", world.name)
                         return world
                     }
                 } catch (e: Exception) {
-                    logger.warning("[DataManager] loadWorldByName: Failed to load world file ${file.name}: ${e.message}")
+                    logger.warning("[DataManager] Failed to load world file ${file.name}: ${e.message}")
                     debugLogger.debug("Failed to parse file", "fileName" to file.name, "error" to e.message)
                 }
             }
         }
 
-        logger.info("[DataManager] loadWorldByName: World '$name' not found")
         debugLogger.debugMethodExit("loadWorldByName", null)
         return null
     }
@@ -171,10 +162,8 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun deleteWorld(worldId: UUID) {
         debugLogger.debugMethodEntry("deleteWorld", "worldId" to worldId)
-        logger.info("[DataManager] deleteWorld: Deleting world ID: $worldId")
         val world = worlds.remove(worldId)
         if (world != null) {
-            logger.info("[DataManager] deleteWorld: Removed world '${world.name}' from cache")
             debugLogger.debug("Removed from cache", "worldName" to world.name, "newCacheSize" to worlds.size)
         } else {
             debugLogger.debug("World was not in cache", "worldId" to worldId)
@@ -183,10 +172,8 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
         debugLogger.debug("Checking file for deletion", "filePath" to file.absolutePath, "exists" to file.exists())
         if (file.exists()) {
             file.delete()
-            logger.info("[DataManager] deleteWorld: Deleted world file: ${file.path}")
             debugLogger.debug("File deleted successfully")
         } else {
-            logger.info("[DataManager] deleteWorld: World file not found for deletion: $worldId")
             debugLogger.debug("File did not exist")
         }
         debugLogger.debugMethodExit("deleteWorld")
@@ -198,7 +185,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun cleanupOrphanedWorld(worldId: UUID) {
         debugLogger.debugMethodEntry("cleanupOrphanedWorld", "worldId" to worldId)
-        logger.info("[DataManager] cleanupOrphanedWorld: Removing orphaned world ID: $worldId")
 
         // Remove from worlds map
         val world = worlds.remove(worldId)
@@ -209,7 +195,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             debugLogger.debug("Checking world file", "filePath" to worldFile.absolutePath, "exists" to worldFile.exists())
             if (worldFile.exists()) {
                 worldFile.delete()
-                logger.info("[DataManager] cleanupOrphanedWorld: Deleted world file for '${world.name}'")
                 debugLogger.debug("World file deleted")
             }
 
@@ -220,7 +205,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
                 val removed = playerData.ownedWorlds.remove(worldId)
                 debugLogger.debug("Removed from owner's ownedWorlds", "removed" to removed, "remainingWorlds" to playerData.ownedWorlds.size)
                 savePlayerData(playerData)
-                logger.info("[DataManager] cleanupOrphanedWorld: Removed world from owner's data")
             }
 
             // Remove any invites for this world
@@ -229,7 +213,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             invites.removeAll(invitesToRemove)
             if (invitesToRemove.isNotEmpty()) {
                 saveInvites()
-                logger.info("[DataManager] cleanupOrphanedWorld: Removed ${invitesToRemove.size} invites")
             }
             debugLogger.debug("Orphaned world cleanup complete", "worldName" to world.name)
         }
@@ -272,7 +255,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             "ownedWorldsCount" to data.ownedWorlds.size,
             "worldStatesCount" to data.worldStates.size
         )
-        logger.info("[DataManager] savePlayerData: Saving player data for '${data.username}' (UUID: ${data.uuid})")
         playerData[data.uuid] = data
         debugLogger.debug("Added player data to cache", "cacheSize" to playerData.size)
         val file = File(playersFolder, "${data.uuid}.json")
@@ -281,10 +263,9 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             val json = gson.toJson(data)
             debugLogger.debug("Serialized player data to JSON", "jsonLength" to json.length)
             file.writeText(json)
-            logger.info("[DataManager] savePlayerData: Successfully saved player data for '${data.username}'")
             debugLogger.debugMethodExit("savePlayerData", "success")
         } catch (e: Exception) {
-            logger.severe("[DataManager] savePlayerData: Failed to save player data for ${data.username} (${data.uuid}): ${e.message}")
+            logger.severe("[DataManager] Failed to save player data for ${data.username} (${data.uuid}): ${e.message}")
             debugLogger.debug("Failed to save player data",
                 "exceptionType" to e.javaClass.simpleName,
                 "exceptionMessage" to e.message
@@ -299,10 +280,8 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun loadPlayerData(playerUuid: UUID): PlayerData? {
         debugLogger.debugMethodEntry("loadPlayerData", "playerUuid" to playerUuid)
-        logger.info("[DataManager] loadPlayerData: Loading player data for UUID: $playerUuid")
         // Check cache first
         playerData[playerUuid]?.let {
-            logger.info("[DataManager] loadPlayerData: Found player '${it.username}' in cache")
             debugLogger.debug("Cache hit", "username" to it.username)
             debugLogger.debugMethodExit("loadPlayerData", it.username)
             return it
@@ -313,7 +292,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
         val file = File(playersFolder, "$playerUuid.json")
         debugLogger.debug("Checking file existence", "filePath" to file.absolutePath, "exists" to file.exists())
         if (!file.exists()) {
-            logger.info("[DataManager] loadPlayerData: Player data file not found for UUID: $playerUuid")
             debugLogger.debugMethodExit("loadPlayerData", null)
             return null
         }
@@ -324,11 +302,10 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
             val data = gson.fromJson(json, PlayerData::class.java)
             playerData[playerUuid] = data
             debugLogger.debug("Deserialized and cached player data", "username" to data.username)
-            logger.info("[DataManager] loadPlayerData: Successfully loaded player data for '${data.username}' from disk")
             debugLogger.debugMethodExit("loadPlayerData", data.username)
             data
         } catch (e: Exception) {
-            logger.severe("[DataManager] loadPlayerData: Failed to load player data for $playerUuid: ${e.message}")
+            logger.severe("[DataManager] Failed to load player data for $playerUuid: ${e.message}")
             debugLogger.debug("Failed to load player data",
                 "exceptionType" to e.javaClass.simpleName,
                 "exceptionMessage" to e.message
@@ -344,7 +321,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun getOrCreatePlayerData(playerUuid: UUID, username: String): PlayerData {
         debugLogger.debugMethodEntry("getOrCreatePlayerData", "playerUuid" to playerUuid, "username" to username)
-        logger.info("[DataManager] getOrCreatePlayerData: Getting or creating player data for '$username' (UUID: $playerUuid)")
         val existingData = loadPlayerData(playerUuid)
         if (existingData != null) {
             debugLogger.debug("Found existing player data", "username" to existingData.username)
@@ -353,7 +329,6 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
         }
         debugLogger.debug("Creating new player data", "username" to username)
         val newData = PlayerData(playerUuid, username)
-        logger.info("[DataManager] getOrCreatePlayerData: Creating new player data for '$username'")
         savePlayerData(newData)
         debugLogger.debugMethodExit("getOrCreatePlayerData", "created: $username")
         return newData
@@ -379,16 +354,14 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun saveInvites() {
         debugLogger.debugMethodEntry("saveInvites", "inviteCount" to invites.size)
-        logger.info("[DataManager] saveInvites: Saving ${invites.size} invites to disk")
         debugLogger.debug("Writing to file", "filePath" to invitesFile.absolutePath)
         try {
             val json = gson.toJson(invites)
             debugLogger.debug("Serialized invites to JSON", "jsonLength" to json.length)
             invitesFile.writeText(json)
-            logger.info("[DataManager] saveInvites: Successfully saved invites to ${invitesFile.path}")
             debugLogger.debugMethodExit("saveInvites", "success")
         } catch (e: Exception) {
-            logger.severe("[DataManager] saveInvites: Failed to save invites: ${e.message}")
+            logger.severe("[DataManager] Failed to save invites: ${e.message}")
             debugLogger.debug("Failed to save invites",
                 "exceptionType" to e.javaClass.simpleName,
                 "exceptionMessage" to e.message
@@ -403,10 +376,8 @@ class DataManager(private val plugin: JavaPlugin, dataFolder: File) {
      */
     fun loadInvites() {
         debugLogger.debugMethodEntry("loadInvites")
-        logger.info("[DataManager] loadInvites: Loading invites from disk")
         debugLogger.debug("Checking file existence", "filePath" to invitesFile.absolutePath, "exists" to invitesFile.exists())
         if (!invitesFile.exists()) {
-            logger.info("[DataManager] loadInvites: Invites file does not exist, skipping")
             debugLogger.debugMethodExit("loadInvites", "skipped - no file")
             return
         }

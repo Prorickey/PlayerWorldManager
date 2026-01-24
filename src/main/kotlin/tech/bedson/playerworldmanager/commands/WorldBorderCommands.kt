@@ -182,10 +182,10 @@ class WorldBorderCommands(
         } else {
             // Try to get the world the player is currently in
             val currentWorld = player.world
-            dataManager.getAllWorlds()
+            dataManager.getWorldsByOwner(player.uniqueId)
                 .find { world ->
-                    val bukkitWorld = Bukkit.getWorld(world.name)
-                    bukkitWorld == currentWorld && world.ownerUuid == player.uniqueId
+                    val bukkitWorld = worldManager.getBukkitWorld(world)
+                    bukkitWorld == currentWorld
                 }
         }
     }
@@ -209,7 +209,7 @@ class WorldBorderCommands(
     }
 
     private fun applyWorldBorder(world: PlayerWorld) {
-        val bukkitWorld = Bukkit.getWorld(world.name) ?: return
+        val bukkitWorld = worldManager.getBukkitWorld(world) ?: return
         val border = bukkitWorld.worldBorder
         val settings = world.worldBorder
 
@@ -224,7 +224,7 @@ class WorldBorderCommands(
     }
 
     private fun applyWorldBorderWithTransition(world: PlayerWorld, targetSize: Double, timeSeconds: Int) {
-        val bukkitWorld = Bukkit.getWorld(world.name) ?: return
+        val bukkitWorld = worldManager.getBukkitWorld(world) ?: return
         val border = bukkitWorld.worldBorder
         val settings = world.worldBorder
 

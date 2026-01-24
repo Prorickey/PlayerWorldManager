@@ -1,6 +1,7 @@
 package tech.bedson.playerworldmanager.models
 
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Data class representing statistics for a player world.
@@ -16,7 +17,7 @@ data class WorldStatistics(
     var animalsKilled: Long = 0,           // Total passive animals killed
     var itemsCrafted: Long = 0,            // Total items crafted
     var timePlayed: Long = 0,              // Total time played in this world (milliseconds)
-    val playerStats: MutableMap<UUID, PlayerStatistics> = mutableMapOf()  // Per-player statistics
+    val playerStats: MutableMap<UUID, PlayerStatistics> = ConcurrentHashMap()  // Per-player statistics (thread-safe)
 ) {
     /**
      * Get or create player statistics for a specific player.

@@ -8,6 +8,7 @@ import tech.bedson.playerworldmanager.models.WorldStatistics
 import tech.bedson.playerworldmanager.utils.DebugLogger
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.logging.Logger
 
 /**
@@ -27,8 +28,8 @@ class StatsManager(
 
     private val statsFolder = File(plugin.dataFolder, "stats")
 
-    // In-memory cache of world statistics
-    private val worldStats = mutableMapOf<UUID, WorldStatistics>()
+    // In-memory cache of world statistics (thread-safe for Folia's multi-threaded environment)
+    private val worldStats = ConcurrentHashMap<UUID, WorldStatistics>()
 
     init {
         statsFolder.mkdirs()
