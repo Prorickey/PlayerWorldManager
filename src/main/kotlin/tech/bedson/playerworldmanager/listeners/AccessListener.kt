@@ -61,8 +61,6 @@ class AccessListener(
             "isCancelled" to event.isCancelled
         )
 
-        plugin.logger.info("[AccessListener] PlayerTeleport: Player '${player.name}' teleporting from '${fromWorld.name}' to '${toWorld.name}' (cause: ${event.cause})")
-
         // Check if destination is a plugin world
         val playerWorld = worldManager.getPlayerWorldFromBukkitWorld(toWorld)
         val isPluginWorld = playerWorld != null
@@ -72,12 +70,10 @@ class AccessListener(
         )
 
         if (playerWorld == null) {
-            plugin.logger.info("[AccessListener] PlayerTeleport: Destination world '${toWorld.name}' is not a plugin world, allowing teleport")
             debugLogger.debugMethodExit("onPlayerTeleport", "allowed" to true)
             return
         }
 
-        plugin.logger.info("[AccessListener] PlayerTeleport: Destination is plugin world '${playerWorld.name}' owned by '${playerWorld.ownerName}'")
         debugLogger.debug("Plugin world details",
             "worldName" to playerWorld.name,
             "worldId" to playerWorld.id,
@@ -95,7 +91,6 @@ class AccessListener(
         )
 
         if (hasAdminBypass) {
-            plugin.logger.info("[AccessListener] PlayerTeleport: Player '${player.name}' has admin bypass permission, allowing teleport")
             debugLogger.debugMethodExit("onPlayerTeleport", "allowed" to true)
             return
         }
@@ -108,11 +103,9 @@ class AccessListener(
             "worldName" to playerWorld.name,
             "hasAccess" to hasAccess
         )
-        plugin.logger.info("[AccessListener] PlayerTeleport: Access check for '${player.name}' to world '${playerWorld.name}': $hasAccess")
 
         if (!hasAccess) {
             event.isCancelled = true
-            plugin.logger.info("[AccessListener] PlayerTeleport: CANCELLED - Player '${player.name}' denied access to '${playerWorld.name}'")
             debugLogger.debug("Teleport CANCELLED - access denied",
                 "player" to player.name,
                 "worldName" to playerWorld.name,
@@ -138,7 +131,10 @@ class AccessListener(
                         player.sendMessage(
                             Component.text("You are visiting this world as a spectator.", NamedTextColor.YELLOW)
                         )
-                        plugin.logger.info("[AccessListener] PlayerTeleport: Set '${player.name}' to spectator mode as visitor in '${playerWorld.name}'")
+                        debugLogger.debug("Set player to spectator mode as visitor",
+                            "player" to player.name,
+                            "worldName" to playerWorld.name
+                        )
                     }
                 }, null)
             }
@@ -155,7 +151,6 @@ class AccessListener(
         val player = event.player
         val fromWorld = player.world
         val toLocation = event.to ?: run {
-            plugin.logger.warning("[AccessListener] PlayerPortal: Player '${player.name}' portal event has no destination")
             debugLogger.debug("Portal destination location is null",
                 "player" to player.name,
                 "playerUuid" to player.uniqueId,
@@ -165,7 +160,6 @@ class AccessListener(
             return
         }
         val toWorld = toLocation.world ?: run {
-            plugin.logger.warning("[AccessListener] PlayerPortal: Player '${player.name}' portal destination has null world")
             debugLogger.debug("Portal destination world is null",
                 "player" to player.name,
                 "playerUuid" to player.uniqueId,
@@ -184,8 +178,6 @@ class AccessListener(
             "isCancelled" to event.isCancelled
         )
 
-        plugin.logger.info("[AccessListener] PlayerPortal: Player '${player.name}' using portal from '${fromWorld.name}' to '${toWorld.name}' (cause: ${event.cause})")
-
         // Check if destination is a plugin world
         val playerWorld = worldManager.getPlayerWorldFromBukkitWorld(toWorld)
         val isPluginWorld = playerWorld != null
@@ -195,12 +187,9 @@ class AccessListener(
         )
 
         if (playerWorld == null) {
-            plugin.logger.info("[AccessListener] PlayerPortal: Destination world '${toWorld.name}' is not a plugin world, allowing portal")
             debugLogger.debugMethodExit("onPlayerPortal", "allowed" to true)
             return
         }
-
-        plugin.logger.info("[AccessListener] PlayerPortal: Destination is plugin world '${playerWorld.name}' owned by '${playerWorld.ownerName}'")
         debugLogger.debug("Plugin world details",
             "worldName" to playerWorld.name,
             "worldId" to playerWorld.id,
@@ -218,7 +207,6 @@ class AccessListener(
         )
 
         if (hasAdminBypass) {
-            plugin.logger.info("[AccessListener] PlayerPortal: Player '${player.name}' has admin bypass permission, allowing portal")
             debugLogger.debugMethodExit("onPlayerPortal", "allowed" to true)
             return
         }
@@ -231,11 +219,9 @@ class AccessListener(
             "worldName" to playerWorld.name,
             "hasAccess" to hasAccess
         )
-        plugin.logger.info("[AccessListener] PlayerPortal: Access check for '${player.name}' to world '${playerWorld.name}': $hasAccess")
 
         if (!hasAccess) {
             event.isCancelled = true
-            plugin.logger.info("[AccessListener] PlayerPortal: CANCELLED - Player '${player.name}' denied portal access to '${playerWorld.name}'")
             debugLogger.debug("Portal CANCELLED - access denied",
                 "player" to player.name,
                 "worldName" to playerWorld.name,
@@ -266,8 +252,6 @@ class AccessListener(
             "currentWorld" to currentWorld.name
         )
 
-        plugin.logger.info("[AccessListener] PlayerChangedWorld: Player '${player.name}' changed from '${fromWorld.name}' to '${currentWorld.name}'")
-
         // Check if current world is a plugin world
         val playerWorld = worldManager.getPlayerWorldFromBukkitWorld(currentWorld)
         val isPluginWorld = playerWorld != null
@@ -277,12 +261,9 @@ class AccessListener(
         )
 
         if (playerWorld == null) {
-            plugin.logger.info("[AccessListener] PlayerChangedWorld: Current world '${currentWorld.name}' is not a plugin world, no access check needed")
             debugLogger.debugMethodExit("onPlayerChangedWorld", "accessCheckSkipped" to true)
             return
         }
-
-        plugin.logger.info("[AccessListener] PlayerChangedWorld: Current world is plugin world '${playerWorld.name}' owned by '${playerWorld.ownerName}'")
         debugLogger.debug("Plugin world details",
             "worldName" to playerWorld.name,
             "worldId" to playerWorld.id,
@@ -300,7 +281,6 @@ class AccessListener(
         )
 
         if (hasAdminBypass) {
-            plugin.logger.info("[AccessListener] PlayerChangedWorld: Player '${player.name}' has admin bypass permission")
             debugLogger.debugMethodExit("onPlayerChangedWorld", "allowed" to true)
             return
         }
@@ -313,7 +293,6 @@ class AccessListener(
             "worldName" to playerWorld.name,
             "hasAccess" to hasAccess
         )
-        plugin.logger.info("[AccessListener] PlayerChangedWorld: Access check for '${player.name}' to world '${playerWorld.name}': $hasAccess")
 
         if (!hasAccess) {
             // Teleport player back to default spawn
@@ -326,7 +305,7 @@ class AccessListener(
             )
 
             if (defaultWorld != null) {
-                plugin.logger.warning("[AccessListener] PlayerChangedWorld: Player '${player.name}' has no access to '${playerWorld.name}', teleporting to spawn in '${defaultWorld.name}'")
+                plugin.logger.warning("[AccessListener] Player '${player.name}' has no access to '${playerWorld.name}', teleporting to spawn")
                 player.scheduler.run(plugin, { _ ->
                     debugLogger.debug("Executing async teleport to default world spawn",
                         "player" to player.name,
@@ -336,7 +315,6 @@ class AccessListener(
                         player.sendMessage(
                             Component.text("You don't have access to this world.", NamedTextColor.RED)
                         )
-                        plugin.logger.info("[AccessListener] PlayerChangedWorld: Player '${player.name}' successfully teleported to spawn")
                         debugLogger.debug("Emergency teleport completed",
                             "player" to player.name,
                             "success" to success
@@ -344,7 +322,7 @@ class AccessListener(
                     }
                 }, null)
             } else {
-                plugin.logger.warning("[AccessListener] PlayerChangedWorld: FAILED - No default world found to teleport '${player.name}' back to")
+                plugin.logger.warning("[AccessListener] No default world found to teleport '${player.name}' back to")
                 debugLogger.debug("Emergency teleport FAILED - no default world",
                     "player" to player.name,
                     "reason" to "no default world available"
@@ -367,7 +345,6 @@ class AccessListener(
                         player.sendMessage(
                             Component.text("You are visiting this world as a spectator.", NamedTextColor.YELLOW)
                         )
-                        plugin.logger.info("[AccessListener] PlayerChangedWorld: Set '${player.name}' to spectator mode as visitor in '${playerWorld.name}'")
                         debugLogger.debug("Set visitor to spectator mode",
                             "player" to player.name,
                             "worldName" to playerWorld.name
@@ -387,7 +364,6 @@ class AccessListener(
     fun onPlayerRespawn(event: PlayerRespawnEvent) {
         val player = event.player
         val respawnWorld = event.respawnLocation.world ?: run {
-            plugin.logger.warning("[AccessListener] PlayerRespawn: Player '${player.name}' has null respawn world")
             debugLogger.debug("Respawn world is null",
                 "player" to player.name,
                 "playerUuid" to player.uniqueId,
@@ -405,8 +381,6 @@ class AccessListener(
             "respawnLocation" to event.respawnLocation
         )
 
-        plugin.logger.info("[AccessListener] PlayerRespawn: Player '${player.name}' respawning in world '${respawnWorld.name}' (isBedSpawn: ${event.isBedSpawn}, isAnchorSpawn: ${event.isAnchorSpawn})")
-
         // Check if respawn world is a plugin world
         val playerWorld = worldManager.getPlayerWorldFromBukkitWorld(respawnWorld)
         val isPluginWorld = playerWorld != null
@@ -416,12 +390,9 @@ class AccessListener(
         )
 
         if (playerWorld == null) {
-            plugin.logger.info("[AccessListener] PlayerRespawn: Respawn world '${respawnWorld.name}' is not a plugin world, allowing respawn")
             debugLogger.debugMethodExit("onPlayerRespawn", "allowed" to true)
             return
         }
-
-        plugin.logger.info("[AccessListener] PlayerRespawn: Respawn world is plugin world '${playerWorld.name}' owned by '${playerWorld.ownerName}'")
         debugLogger.debug("Plugin world details",
             "worldName" to playerWorld.name,
             "worldId" to playerWorld.id,
@@ -439,7 +410,6 @@ class AccessListener(
         )
 
         if (hasAdminBypass) {
-            plugin.logger.info("[AccessListener] PlayerRespawn: Player '${player.name}' has admin bypass permission, allowing respawn")
             debugLogger.debugMethodExit("onPlayerRespawn", "allowed" to true)
             return
         }
@@ -452,7 +422,6 @@ class AccessListener(
             "worldName" to playerWorld.name,
             "hasAccess" to hasAccess
         )
-        plugin.logger.info("[AccessListener] PlayerRespawn: Access check for '${player.name}' to world '${playerWorld.name}': $hasAccess")
 
         if (!hasAccess) {
             // Override respawn location to default world
@@ -465,7 +434,6 @@ class AccessListener(
             )
 
             if (defaultWorld != null) {
-                plugin.logger.warning("[AccessListener] PlayerRespawn: Player '${player.name}' has no access to '${playerWorld.name}', overriding respawn to '${defaultWorld.name}'")
                 val originalLocation = event.respawnLocation
                 event.respawnLocation = defaultWorld.spawnLocation
                 debugLogger.debug("Respawn location overridden",
@@ -477,7 +445,7 @@ class AccessListener(
                     Component.text("You no longer have access to that world.", NamedTextColor.RED)
                 )
             } else {
-                plugin.logger.warning("[AccessListener] PlayerRespawn: FAILED - No default world found to respawn '${player.name}'")
+                plugin.logger.warning("[AccessListener] No default world found to respawn '${player.name}'")
                 debugLogger.debug("Respawn override FAILED - no default world",
                     "player" to player.name,
                     "reason" to "no default world available"

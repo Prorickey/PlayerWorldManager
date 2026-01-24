@@ -237,9 +237,11 @@ class BackupManager(
                     "destination" to worldFolder.absolutePath
                 )
 
-                // Kick all players from the world before restoring
+                // Kick all players from the world before restoring and track them
                 Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
                     val bukkitWorld = Bukkit.getWorld(worldFolderName)
+                    val affectedPlayers = bukkitWorld?.players?.map { it.uniqueId } ?: emptyList()
+
                     bukkitWorld?.players?.forEach { player ->
                         player.sendMessage(net.kyori.adventure.text.Component.text(
                             "World is being restored from backup. You have been moved to spawn.",
@@ -280,11 +282,41 @@ class BackupManager(
                             }
 
                             logger.info("[BackupManager] Restored world '${world.name}' from backup ${backup.id}")
+
+                            // Notify affected players of successful restoration
+                            Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+                                affectedPlayers.forEach { playerId ->
+                                    Bukkit.getPlayer(playerId)?.sendMessage(
+                                        net.kyori.adventure.text.Component.text(
+                                            "World '${world.name}' has been restored successfully. You can now return.",
+                                            net.kyori.adventure.text.format.NamedTextColor.GREEN
+                                        )
+                                    )
+                                }
+                            }
+
                             debugLogger.debugMethodExit("restoreBackup", "success")
                             future.complete(Result.success(Unit))
 
                         } catch (e: Exception) {
                             logger.severe("[BackupManager] Failed to restore backup: ${e.message}")
+                            debugLogger.debug("Backup restoration failed after moving players",
+                                "error" to e.message,
+                                "affectedPlayers" to affectedPlayers.size
+                            )
+
+                            // Notify affected players of failure
+                            Bukkit.getGlobalRegionScheduler().run(plugin) { _ ->
+                                affectedPlayers.forEach { playerId ->
+                                    Bukkit.getPlayer(playerId)?.sendMessage(
+                                        net.kyori.adventure.text.Component.text(
+                                            "Failed to restore world '${world.name}'. The world may be in an inconsistent state. Please contact an administrator.",
+                                            net.kyori.adventure.text.format.NamedTextColor.RED
+                                        )
+                                    )
+                                }
+                            }
+
                             future.complete(Result.failure(e))
                         }
                     }, 2, TimeUnit.SECONDS)

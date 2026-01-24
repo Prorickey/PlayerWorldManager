@@ -11,7 +11,9 @@ import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.entity.EntityDeathEvent
 import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.inventory.CraftItemEvent
+import org.bukkit.event.inventory.InventoryType
 import org.bukkit.event.player.PlayerChangedWorldEvent
+import org.bukkit.inventory.CraftingInventory
 import org.bukkit.event.player.PlayerJoinEvent
 import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.plugin.java.JavaPlugin
@@ -134,18 +136,31 @@ class StatsListener(
         val worldId = statsManager.getWorldIdFromBukkitWorld(player.world) ?: return
 
         // Calculate actual amount crafted (considering shift-click)
+        val resultAmount = event.recipe.result.amount
         val amount = if (event.isShiftClick) {
-            // Estimate based on result amount
-            event.recipe.result.amount
+            // For shift-click, calculate max crafts based on smallest ingredient stack
+            val inventory = event.inventory as? CraftingInventory ?: return
+            val matrix = inventory.matrix
+
+            // Find the minimum stack size among non-null ingredients
+            val minIngredientCount = matrix
+                .filterNotNull()
+                .filter { !it.type.isAir }
+                .minOfOrNull { it.amount } ?: 1
+
+            // Calculate how many times we can craft (capped at 64 / resultAmount to fit in one stack)
+            val maxCrafts = minOf(minIngredientCount, 64 / resultAmount)
+            maxCrafts * resultAmount
         } else {
-            event.recipe.result.amount
+            resultAmount
         }
 
         debugLogger.debug("Item crafted",
             "player" to player.name,
             "worldId" to worldId,
             "item" to event.recipe.result.type,
-            "amount" to amount
+            "amount" to amount,
+            "isShiftClick" to event.isShiftClick
         )
 
         statsManager.recordItemCrafted(worldId, player.uniqueId, amount)
